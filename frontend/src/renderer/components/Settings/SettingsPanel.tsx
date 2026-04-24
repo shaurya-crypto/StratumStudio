@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { X } from 'lucide-react'
-import { useAppStore } from '../../store/useAppStore'
+import { X, RotateCcw } from 'lucide-react'
+import { useAppStore, AIProvider } from '../../store/useAppStore'
+import { isElectron } from '../../utils/electron'
 
 const NAV_ITEMS = [
   { id: 'appearance', label: 'Appearance' },
@@ -10,13 +11,72 @@ const NAV_ITEMS = [
   { id: 'keybindings', label: 'Keyboard Shortcuts' },
 ]
 
-// Provider info kept for settings page only (not exported)
-const SETTINGS_PROVIDERS = [
-  { id: 'openai', name: 'OpenAI', models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'] },
-  { id: 'anthropic', name: 'Anthropic (Claude)', models: ['claude-sonnet-4-5-20251001', 'claude-haiku-4-5-20251001'] },
-  { id: 'gemini', name: 'Google Gemini', models: ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.0-flash'] },
-  { id: 'groq', name: 'Groq', models: ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'mixtral-8x7b-32768'] },
-  { id: 'ollama', name: 'Ollama (Local)', models: ['llama3.2', 'llama3.1', 'codellama', 'mistral', 'deepseek-coder'] },
+// Provider info with models including "auto"
+const SETTINGS_PROVIDERS: {
+  id: AIProvider; name: string;
+  models: { id: string; label: string }[];
+  keyUrl: string;
+}[] = [
+  {
+    id: 'openai', name: 'OpenAI',
+    models: [
+      { id: 'auto', label: 'Auto (Smart Routing)' },
+      { id: 'gpt-4o', label: 'GPT-4o' },
+      { id: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+      { id: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+    ],
+    keyUrl: 'https://platform.openai.com/api-keys',
+  },
+  {
+    id: 'anthropic', name: 'Anthropic (Claude)',
+    models: [
+      { id: 'auto', label: 'Auto (Smart Routing)' },
+      { id: 'claude-sonnet-4-5-20251001', label: 'Claude Sonnet 4.5' },
+      { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+    ],
+    keyUrl: 'https://console.anthropic.com/settings/keys',
+  },
+  {
+    id: 'gemini', name: 'Google Gemini',
+    models: [
+      { id: 'auto', label: 'Auto (Smart Routing)' },
+      { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+      { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+      { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+    ],
+    keyUrl: 'https://aistudio.google.com/apikey',
+  },
+  {
+    id: 'groq', name: 'Groq',
+    models: [
+      { id: 'auto', label: 'Auto (Smart Routing)' },
+      { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B' },
+      { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant' },
+      { id: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B' },
+    ],
+    keyUrl: 'https://console.groq.com/keys',
+  },
+  {
+    id: 'openrouter', name: 'OpenRouter',
+    models: [
+      { id: 'auto', label: 'Auto (Smart Routing)' },
+      { id: 'kimi-k2.5', label: 'Kimi K2.5' },
+      { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+      { id: 'anthropic/claude-sonnet-4', label: 'Claude Sonnet 4' },
+    ],
+    keyUrl: 'https://openrouter.ai/keys',
+  },
+  {
+    id: 'ollama', name: 'Ollama (Local)',
+    models: [
+      { id: 'auto', label: 'Auto (Smart Routing)' },
+      { id: 'llama3.2', label: 'Llama 3.2' },
+      { id: 'codellama', label: 'Code Llama' },
+      { id: 'deepseek-coder', label: 'DeepSeek Coder' },
+      { id: 'mistral', label: 'Mistral' },
+    ],
+    keyUrl: 'https://ollama.com/download',
+  },
 ]
 
 // Keep the old export name for backward compat if anything imports it
@@ -49,14 +109,15 @@ export default function SettingsPanel() {
     setSettingsOpen, theme, setTheme,
     apiConfig, updateAPIConfig, showNotification,
     autoSave, setAutoSave,
+    resetConfig,
   } = useAppStore()
 
   const [activeSection, setActiveSection] = useState('appearance')
 
-  // Local state for AI settings
-  const [provider, setProvider] = useState(apiConfig?.provider ?? 'anthropic')
+  // Local state for AI settings — synced from global config
+  const [provider, setProvider] = useState<AIProvider>(apiConfig?.provider ?? 'openai')
   const [apiKey, setApiKey] = useState(apiConfig?.apiKey ?? '')
-  const [model, setModel] = useState(apiConfig?.model ?? '')
+  const [model, setModel] = useState(apiConfig?.model ?? 'auto')
   const [baseUrl, setBaseUrl] = useState(apiConfig?.baseUrl ?? 'http://localhost:11434')
 
   // Editor prefs
@@ -66,14 +127,31 @@ export default function SettingsPanel() {
   const [minimap, setMinimap] = useState(true)
   const [ligatures, setLigatures] = useState(true)
 
-  const saveAISettings = async () => {
-    updateAPIConfig({ provider: provider as any, apiKey, model, baseUrl: provider === 'ollama' ? baseUrl : undefined })
+  const currentProviderConfig = SETTINGS_PROVIDERS.find(p => p.id === provider)
 
-    if ((window as any).electronAPI && (window as any).electronAPI.saveApiSettings) {
-      await (window as any).electronAPI.saveApiSettings({ provider, apiKey, model, baseUrl });
+  const saveAISettings = async () => {
+    const config = {
+      provider: provider as AIProvider,
+      apiKey,
+      model,
+      baseUrl: provider === 'ollama' ? baseUrl : undefined,
+    }
+    updateAPIConfig(config)
+
+    if (isElectron && (window as any).electronAPI?.saveApiSettings) {
+      await (window as any).electronAPI.saveApiSettings(config);
     }
 
     showNotification('API settings saved', 'success')
+  }
+
+  const handleReset = async () => {
+    await resetConfig()
+    setProvider('openai')
+    setApiKey('')
+    setModel('auto')
+    setBaseUrl('http://localhost:11434')
+    showNotification('API settings cleared — reconfigure in AI panel', 'info')
   }
 
   return (
@@ -220,10 +298,9 @@ export default function SettingsPanel() {
                   className="form-select"
                   value={provider}
                   onChange={(e) => {
-                    const newProvider = e.target.value;
-                    setProvider(newProvider as any);
-                    const defaultModel = SETTINGS_PROVIDERS.find(p => p.id === newProvider)?.models[0] || '';
-                    setModel(defaultModel);
+                    const newProvider = e.target.value as AIProvider;
+                    setProvider(newProvider);
+                    setModel('auto');
                   }}
                 >
                   {SETTINGS_PROVIDERS.map((p) => (
@@ -240,9 +317,27 @@ export default function SettingsPanel() {
                     type="password"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
-                    placeholder={`Enter ${provider} API key`}
+                    placeholder={`Enter ${currentProviderConfig?.name ?? provider} API key`}
                     spellCheck={false}
                   />
+                  {currentProviderConfig && (
+                    <div style={{ marginTop: 4 }}>
+                      <a
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          if (isElectron) {
+                            (window as any).electronAPI.openExternal(currentProviderConfig.keyUrl)
+                          } else {
+                            window.open(currentProviderConfig.keyUrl, '_blank')
+                          }
+                        }}
+                        style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}
+                      >
+                        Get your API key →
+                      </a>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -265,10 +360,15 @@ export default function SettingsPanel() {
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
                 >
-                  {SETTINGS_PROVIDERS.find(p => p.id === provider)?.models.map(m => (
-                    <option key={m} value={m}>{m}</option>
+                  {currentProviderConfig?.models.map(m => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
                   ))}
                 </select>
+                {model === 'auto' && (
+                  <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-dim)' }}>
+                    ElectroCODE will automatically select the best model based on prompt complexity
+                  </div>
+                )}
               </div>
 
               <div style={{
@@ -287,6 +387,21 @@ export default function SettingsPanel() {
 
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn btn-primary" onClick={saveAISettings}>Save</button>
+                <button
+                  className="btn"
+                  onClick={handleReset}
+                  style={{
+                    padding: '6px 14px', fontSize: 12,
+                    background: 'transparent',
+                    border: '1px solid var(--red, #ef4444)',
+                    color: 'var(--red, #ef4444)',
+                    borderRadius: 'var(--radius)',
+                    cursor: 'pointer',
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                  }}
+                >
+                  <RotateCcw size={12} /> Reset API Settings
+                </button>
               </div>
             </div>
           )}

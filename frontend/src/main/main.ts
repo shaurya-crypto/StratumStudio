@@ -216,7 +216,8 @@ function setupIpcHandlers() {
 
   ipcMain.handle("fs:readFile", async (_, { filePath }) => {
     try {
-      return fs.readFileSync(filePath, "utf-8");
+      const content = fs.readFileSync(filePath, "utf-8");
+      return { content };
     } catch (e) {
       return null;
     }
@@ -247,6 +248,77 @@ function setupIpcHandlers() {
     } catch (e: any) {
       return { success: false, message: e.message };
     }
+  });
+
+  ipcMain.handle("fs:deleteSafe", async (_, { filePath }) => {
+    try {
+      if (!fs.existsSync(filePath)) return { success: true };
+      await shell.trashItem(filePath);
+      return { success: true };
+    } catch (e: any) {
+      // Fallback to rmSync if trashItem fails (e.g. on some Linux distros)
+      try {
+        fs.rmSync(filePath, { recursive: true, force: true });
+        return { success: true };
+      } catch (innerE: any) {
+        return { success: false, message: e.message + " | " + innerE.message };
+      }
+    }
+  });
+
+  ipcMain.handle("fs:exists", async (_, { filePath }) => {
+    try {
+      return { success: true, exists: fs.existsSync(filePath) };
+    } catch (e: any) {
+      return { success: false, message: e.message };
+    }
+  });
+
+  ipcMain.handle("fs:writeFile", async (_, { filePath, content }) => {
+    try {
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(filePath, content, "utf-8");
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, message: e.message };
+    }
+  });
+
+  ipcMain.handle("fs:readDeep", async (_, { folderPath }) => {
+    const IGNORED_DIRS = new Set(['node_modules', '.git', '__pycache__', 'venv', '.venv', 'build', 'dist', '.idea', '.vscode']);
+    const MAX_FILE_SIZE = 50 * 1024; // 50KB
+
+    const results: { path: string; content: string }[] = [];
+
+    async function walk(dir: string) {
+      try {
+        const dirents = await fs.promises.readdir(dir, { withFileTypes: true });
+        for (const dirent of dirents) {
+          if (IGNORED_DIRS.has(dirent.name) || dirent.name.startsWith('.')) continue;
+
+          const fullPath = path.join(dir, dirent.name);
+          if (dirent.isDirectory()) {
+            await walk(fullPath);
+          } else if (dirent.isFile()) {
+            const ext = path.extname(dirent.name).toLowerCase();
+            const binExts = ['.exe', '.dll', '.png', '.jpg', '.jpeg', '.gif', '.bin', '.uf2', '.zip', '.tar', '.gz', '.pdf', '.mp4', '.mp3'];
+            if (binExts.includes(ext)) continue;
+
+            const stats = await fs.promises.stat(fullPath);
+            if (stats.size > MAX_FILE_SIZE) continue;
+
+            const content = await fs.promises.readFile(fullPath, 'utf-8');
+            results.push({ path: path.relative(folderPath, fullPath), content });
+          }
+        }
+      } catch (e) {
+        // Silently skip inaccessible paths
+      }
+    }
+
+    await walk(folderPath);
+    return results;
   });
 
   ipcMain.handle("fs:rename", async (_, { oldPath, newPath }) => {
@@ -298,6 +370,19 @@ function setupIpcHandlers() {
       };
     } catch (e) {
       return null;
+    }
+  });
+
+  // Reset / Wipe stored API settings (for re-testing setup flow)
+  ipcMain.handle("resetApiSettings", async () => {
+    try {
+      const settingsPath = path.join(app.getPath("userData"), "config", "settings.json");
+      if (fs.existsSync(settingsPath)) {
+        fs.unlinkSync(settingsPath);
+      }
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, message: e.message };
     }
   });
 

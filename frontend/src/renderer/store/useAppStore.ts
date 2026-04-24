@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { sendMcpEvent } from "./mcpClient";
+import { isElectron } from "../utils/electron";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -12,7 +13,9 @@ export type AIProvider =
   | "openrouter"
   | "ollama"
   | "huggingface"
-  | "groq";
+  | "groq"
+  | "deepseek"
+  | "mistral";
 export type SidebarView = "explorer" | "device" | "settings" | null;
 
 export interface APIConfig {
@@ -82,6 +85,17 @@ export interface TerminalInstance {
   name: string;
   lines: string[];
   type: "serial" | "output";
+}
+
+export interface AIAction {
+  id: string;
+  type: 'write' | 'delete' | 'run';
+  target?: 'local' | 'hardware';
+  path?: string; 
+  content?: string; 
+  status: 'pending' | 'executing' | 'success' | 'error' | 'cancelled';
+  errorMessage?: string;
+  isExistingFileOverwrite?: boolean;
 }
 
 // ── Interpreters list ──────────────────────────────────────────
@@ -251,11 +265,15 @@ const defaultTree: FileNode[] = [];
 interface AppStore {
   // Setup
   setupComplete: boolean;
+  isElectron: boolean;
   apiKey: string | null;
   setApiKey: (key: string) => void;
   apiConfig: APIConfig | null;
   completeSetup: (config: APIConfig) => void;
   updateAPIConfig: (config: APIConfig) => void;
+  apiKeyModalOpen: boolean;
+  setApiKeyModalOpen: (v: boolean) => void;
+  resetConfig: () => Promise<void>;
   loadAPIConfig: () => Promise<void>;
 
   // Theme
@@ -337,6 +355,15 @@ interface AppStore {
   setAiSuggestion: (s: AISuggestion | null) => void;
   acceptSuggestion: () => void;
   declineSuggestion: () => void;
+  pendingAiPrompt: string | null;
+  setPendingAiPrompt: (p: string | null) => void;
+  aiActionSetting: 'ask' | 'automatic';
+  setAiActionSetting: (setting: 'ask' | 'automatic') => void;
+  aiActions: AIAction[];
+  addAiAction: (action: AIAction) => void;
+  updateAiAction: (id: string, updates: Partial<AIAction>) => void;
+  removeAiAction: (id: string) => void;
+  clearAiActions: () => void;
 
   // Terminals
   terminals: TerminalInstance[];
@@ -350,6 +377,7 @@ interface AppStore {
   setTerminalHeight: (h: number) => void;
   terminalOpen: boolean;
   setTerminalOpen: (v: boolean) => void;
+  ptyInput: (data: string) => Promise<void>;
 
   // Notifications
   notification: {
@@ -397,6 +425,7 @@ export const useAppStore = create<AppStore>()(
     (set, get) => ({
       // Setup
       setupComplete: false,
+      isElectron: isElectron,
       apiKey: null,
       setApiKey: async (key: string) => {
         set({ apiKey: key });
@@ -404,24 +433,31 @@ export const useAppStore = create<AppStore>()(
         if (currentConfig) {
           const newConfig = { ...currentConfig, apiKey: key };
           set({ apiConfig: newConfig });
-          await (window as any).electronAPI.saveApiSettings(newConfig);
+          if (isElectron) await (window as any).electronAPI.saveApiSettings(newConfig);
         } else {
           // Default config if none exists
-          const newConfig: APIConfig = { provider: 'openai', model: 'gpt-4o', apiKey: key };
+          const newConfig: APIConfig = { provider: 'openai', model: 'auto', apiKey: key };
           set({ apiConfig: newConfig, setupComplete: true });
-          await (window as any).electronAPI.saveApiSettings(newConfig);
+          if (isElectron) await (window as any).electronAPI.saveApiSettings(newConfig);
         }
       },
       apiConfig: null,
+      apiKeyModalOpen: false,
+      setApiKeyModalOpen: (v) => set({ apiKeyModalOpen: v }),
       completeSetup: async (config) => {
         set({ setupComplete: true, apiConfig: config, apiKey: config.apiKey });
-        await (window as any).electronAPI.saveApiSettings(config);
+        if (isElectron) await (window as any).electronAPI.saveApiSettings(config);
       },
       updateAPIConfig: async (config) => {
         set({ apiConfig: config, apiKey: config.apiKey });
-        await (window as any).electronAPI.saveApiSettings(config);
+        if (isElectron) await (window as any).electronAPI.saveApiSettings(config);
+      },
+      resetConfig: async () => {
+        set({ apiConfig: null, apiKey: null, setupComplete: false });
+        if (isElectron) await (window as any).electronAPI.resetApiSettings();
       },
       loadAPIConfig: async () => {
+        if (!isElectron) return;
         const config = await (window as any).electronAPI.loadApiSettings();
         if (config) {
           set({ apiConfig: config, apiKey: config.apiKey, setupComplete: true });
@@ -837,18 +873,25 @@ export const useAppStore = create<AppStore>()(
       acceptSuggestion: () => {
         const { aiSuggestion, activeTabId } = get();
         if (!aiSuggestion || !activeTabId) return;
-        set((s) => ({
-          tabs: s.tabs.map((t) =>
-            t.id === activeTabId ? { ...t, content: aiSuggestion.code } : t,
-          ),
-          aiSuggestion: null,
-        }));
+        get().updateContent(activeTabId, aiSuggestion.code);
+        set({ aiSuggestion: null });
         get().showNotification("Suggestion accepted", "success");
       },
       declineSuggestion: () => {
         set({ aiSuggestion: null });
         get().showNotification("Suggestion declined", "info");
       },
+      pendingAiPrompt: null,
+      setPendingAiPrompt: (p) => set({ pendingAiPrompt: p }),
+      aiActionSetting: 'ask',
+      setAiActionSetting: (setting) => set({ aiActionSetting: setting }),
+      aiActions: [],
+      addAiAction: (action) => set((s) => ({ aiActions: [...s.aiActions, action] })),
+      updateAiAction: (id, updates) => set((s) => ({
+        aiActions: s.aiActions.map(a => a.id === id ? { ...a, ...updates } : a)
+      })),
+      removeAiAction: (id) => set((s) => ({ aiActions: s.aiActions.filter(a => a.id !== id) })),
+      clearAiActions: () => set({ aiActions: [] }),
 
       // Terminals
       terminals: [defaultTerminal],
@@ -913,6 +956,11 @@ export const useAppStore = create<AppStore>()(
         set({ terminalHeight: Math.max(80, Math.min(600, h)) }),
       terminalOpen: true,
       setTerminalOpen: (v) => set({ terminalOpen: v }),
+      ptyInput: async (data) => {
+        if (isElectron) {
+          await (window as any).electronAPI.ptyInput(data);
+        }
+      },
 
       // Notifications
       notification: null,
@@ -1139,9 +1187,13 @@ export const useAppStore = create<AppStore>()(
         conversations: s.conversations,
         currentConversationId: s.currentConversationId,
       }),
-      onRehydrateStorage: (state) => {
-        // Automatically fetch secure settings on app start
-        state?.loadAPIConfig();
+      onRehydrateStorage: () => {
+        // Return a callback that runs after rehydration is complete
+        return (state: AppStore | undefined) => {
+          if (state && isElectron) {
+            state.loadAPIConfig();
+          }
+        };
       }
     },
   ),

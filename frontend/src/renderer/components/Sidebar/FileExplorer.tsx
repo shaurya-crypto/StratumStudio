@@ -108,7 +108,8 @@ function ContextMenu({ state, onClose }: { state: ContextMenuState; onClose: () 
           action: async () => {
             const node = state.node
             if (!node) return
-            const content = await (window as any).electronAPI?.fsReadFile?.({ filePath: node.filePath })
+            const result = await (window as any).electronAPI?.fsReadFile?.({ filePath: node.filePath })
+            const content = result?.content ?? ''
             openTab({
               id: node.id,
               name: node.name,
@@ -178,7 +179,8 @@ function ContextMenu({ state, onClose }: { state: ContextMenuState; onClose: () 
             const node = state.node
             if (!node || !node.filePath) return
             try {
-              const content = await (window as any).electronAPI?.fsReadFile?.({ filePath: node.filePath })
+              const fileResult = await (window as any).electronAPI?.fsReadFile?.({ filePath: node.filePath })
+              const content = fileResult?.content ?? ''
               sendMcpEvent('attach_file', {
                 fileName: node.name,
                 fileData: { filePath: node.filePath, content: content || '' }
@@ -297,7 +299,8 @@ function TreeRow({ node, depth, onContextMenu, isDevice }: TreeRowProps) {
       let content = ''
       if (node.filePath) {
         try {
-          content = await (window as any).electronAPI?.fsReadFile?.({ filePath: node.filePath }) ?? ''
+          const fileRes = await (window as any).electronAPI?.fsReadFile?.({ filePath: node.filePath })
+            content = fileRes?.content ?? ''
         } catch {
           content = ''
         }

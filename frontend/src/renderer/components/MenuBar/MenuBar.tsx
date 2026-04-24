@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Minus, Square, X } from 'lucide-react'
 import { useAppStore } from '../../store/useAppStore'
 import { getLanguageFromFilename } from '../../utils/Fileicon'
+import { isElectron } from '../../utils/electron'
 
 interface MenuItem {
   label: string
@@ -77,6 +78,7 @@ export default function MenuBar() {
   } = useAppStore()
 
 useEffect(() => {
+    if (!isElectron) return;
     // This function runs every time Python prints something
     const handleTerminalData = (data: string) => {
       // Get the freshest state directly from Zustand
@@ -87,7 +89,7 @@ useEffect(() => {
     const cleanup = (window as any).electronAPI.onTerminalOutput(handleTerminalData);
 
     return () => {
-      cleanup();
+      cleanup?.();
     };
   }, []);
 

@@ -46,6 +46,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   createFile: (args: any) => ipcRenderer.invoke("fs:createFile", args),
   createFolder: (args: any) => ipcRenderer.invoke("fs:createFolder", args),
   fsDelete: (args: any) => ipcRenderer.invoke("fs:delete", args),
+  fsDeleteSafe: (args: any) => ipcRenderer.invoke("fs:deleteSafe", args),
+  fsExists: (args: any) => ipcRenderer.invoke("fs:exists", args),
+  fsWriteFile: (args: any) => ipcRenderer.invoke("fs:writeFile", args),
+  fsReadDeep: (args: any) => ipcRenderer.invoke("fs:readDeep", args),
   fsRename: (args: any) => ipcRenderer.invoke("fs:rename", args),
 
   // API Config
@@ -96,6 +100,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("firmware-progress", handler);
     return () => ipcRenderer.off("firmware-progress", handler);
   },
+
+  // Reset / Sign Out
+  resetApiSettings: () => ipcRenderer.invoke("resetApiSettings"),
 
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke("shell:openExternal", url),

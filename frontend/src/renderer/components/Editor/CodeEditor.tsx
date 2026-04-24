@@ -1,4 +1,4 @@
-import Editor from '@monaco-editor/react'
+import Editor, { DiffEditor } from '@monaco-editor/react'
 import { useAppStore } from '../../store/useAppStore'
 import { CheckCircle, XCircle } from 'lucide-react'
 import { sendMcpEvent } from '../../store/mcpClient'
@@ -367,90 +367,106 @@ export default function CodeEditor() {
         </div>
       )}
 
-      <Editor
-        height="100%"
-        language={activeTab.language}
-        value={aiSuggestion ? aiSuggestion.code : activeTab.content}
-        onMount={(editor) => {
-          editor.onDidChangeCursorPosition((e) => {
-             const model = editor.getModel();
-             if (!model) return;
-             sendMcpEvent('code_sync', {
-               filePath: activeTab.filePath || activeTab.name || 'untitled',
-               content: model.getValue(),
-               cursorLine: e.position.lineNumber,
-               cursorChar: e.position.column,
-               selectedText: editor.getModel()?.getValueInRange(editor.getSelection()!) || ''
-             });
-          });
-
-          editor.onDidChangeCursorSelection((e) => {
-            const model = editor.getModel();
-            if (!model) return;
-            const selection = e.selection;
-            sendMcpEvent('code_sync', {
-              filePath: activeTab.filePath || activeTab.name || 'untitled',
-              content: model.getValue(),
-              cursorLine: selection.positionLineNumber,
-              cursorChar: selection.positionColumn,
-              selectedText: model.getValueInRange(selection)
+      {aiSuggestion ? (
+        <DiffEditor
+          height="100%"
+          language={activeTab.language}
+          original={activeTab.content}
+          modified={aiSuggestion.code}
+          theme={monacoTheme}
+          options={{
+            readOnly: true,
+            fontFamily: "'JetBrains Mono', Consolas, 'Courier New', monospace",
+            fontSize: 14,
+            minimap: { enabled: false },
+          }}
+        />
+      ) : (
+        <Editor
+          height="100%"
+          language={activeTab.language}
+          value={activeTab.content}
+          onMount={(editor) => {
+            editor.onDidChangeCursorPosition((e) => {
+               const model = editor.getModel();
+               if (!model) return;
+               sendMcpEvent('code_sync', {
+                 filePath: activeTab.filePath || activeTab.name || 'untitled',
+                 content: model.getValue(),
+                 cursorLine: e.position.lineNumber,
+                 cursorChar: e.position.column,
+                 selectedText: editor.getModel()?.getValueInRange(editor.getSelection()!) || ''
+               });
             });
-          });
-        }}
-        onChange={(val) => {
-          const store = useAppStore.getState()
-          if (!store.aiSuggestion) {
-            updateContent(activeTab.id, val ?? '')
-          }
-        }}
-        theme={monacoTheme}
-        beforeMount={defineThemes}
-        options={{
-          fontFamily: "'JetBrains Mono', Consolas, 'Courier New', monospace",
-          fontSize: 14,
-          fontLigatures: true,
-          lineHeight: 22,
-          minimap: { enabled: true, scale: 1, renderCharacters: false },
-          scrollBeyondLastLine: false,
-          renderLineHighlight: 'all',
-          cursorBlinking: 'smooth',
-          cursorSmoothCaretAnimation: 'on',
-          smoothScrolling: true,
-          padding: { top: 8, bottom: 8 },
-          tabSize: 4,
-          insertSpaces: true,
-          wordWrap: 'off',
-          bracketPairColorization: { enabled: true },
-          guides: { indentation: true, bracketPairs: true },
-          suggest: {
-            preview: true,
-            showKeywords: true,
-            showFunctions: true,
-            showModules: true,
-            showSnippets: true,
-          },
-          inlineSuggest: { enabled: true },
-          quickSuggestions: {
-            other: true,
-            comments: false,
-            strings: false,
-          },
-          folding: true,
-          foldingStrategy: 'indentation',
-          showFoldingControls: 'mouseover',
-          renderWhitespace: 'none',
-          occurrencesHighlight: 'singleFile',
-          overviewRulerLanes: 2,
-          hideCursorInOverviewRuler: false,
-          links: true,
-          readOnly: !!aiSuggestion,
-          roundedSelection: true,
-          scrollbar: {
-            verticalScrollbarSize: 8,
-            horizontalScrollbarSize: 8,
-          },
-        }}
-      />
+
+            editor.onDidChangeCursorSelection((e) => {
+              const model = editor.getModel();
+              if (!model) return;
+              const selection = e.selection;
+              sendMcpEvent('code_sync', {
+                filePath: activeTab.filePath || activeTab.name || 'untitled',
+                content: model.getValue(),
+                cursorLine: selection.positionLineNumber,
+                cursorChar: selection.positionColumn,
+                selectedText: model.getValueInRange(selection)
+              });
+            });
+          }}
+          onChange={(val) => {
+            const store = useAppStore.getState()
+            if (!store.aiSuggestion) {
+              updateContent(activeTab.id, val ?? '')
+            }
+          }}
+          theme={monacoTheme}
+          beforeMount={defineThemes}
+          options={{
+            fontFamily: "'JetBrains Mono', Consolas, 'Courier New', monospace",
+            fontSize: 14,
+            fontLigatures: true,
+            lineHeight: 22,
+            minimap: { enabled: true, scale: 1, renderCharacters: false },
+            scrollBeyondLastLine: false,
+            renderLineHighlight: 'all',
+            cursorBlinking: 'smooth',
+            cursorSmoothCaretAnimation: 'on',
+            smoothScrolling: true,
+            padding: { top: 8, bottom: 8 },
+            tabSize: 4,
+            insertSpaces: true,
+            wordWrap: 'off',
+            bracketPairColorization: { enabled: true },
+            guides: { indentation: true, bracketPairs: true },
+            suggest: {
+              preview: true,
+              showKeywords: true,
+              showFunctions: true,
+              showModules: true,
+              showSnippets: true,
+            },
+            inlineSuggest: { enabled: true },
+            quickSuggestions: {
+              other: true,
+              comments: false,
+              strings: false,
+            },
+            folding: true,
+            foldingStrategy: 'indentation',
+            showFoldingControls: 'mouseover',
+            renderWhitespace: 'none',
+            occurrencesHighlight: 'singleFile',
+            overviewRulerLanes: 2,
+            hideCursorInOverviewRuler: false,
+            links: true,
+            readOnly: !!aiSuggestion,
+            roundedSelection: true,
+            scrollbar: {
+              verticalScrollbarSize: 8,
+              horizontalScrollbarSize: 8,
+            },
+          }}
+        />
+      )}
     </div>
   )
 }

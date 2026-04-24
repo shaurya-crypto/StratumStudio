@@ -1,23 +1,24 @@
 import { useRef, useEffect, useState } from 'react'
-import { Trash2, Zap, Copy, Radio, SquareTerminal, FileOutput } from 'lucide-react'
+import { Trash2, Zap, Copy, Radio, SquareTerminal, FileOutput, Plus, X } from 'lucide-react'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import 'xterm/css/xterm.css'
 import { useAppStore } from '../../store/useAppStore'
+import { isElectron } from '../../utils/electron'
 
-type TerminalTabId = 'serial' | 'output' | 'terminal'
+type TerminalTabId = string
 
-const TERMINAL_TABS: { id: TerminalTabId; label: string; icon: React.ReactNode }[] = [
-  { id: 'serial',   label: 'Serial Monitor', icon: <Radio size={13} /> },
+const TERMINAL_TABS = [
   { id: 'output',   label: 'Output',         icon: <FileOutput size={13} /> },
   { id: 'terminal', label: 'Local Shell',    icon: <SquareTerminal size={13} /> },
+
 ]
 
 export default function TerminalPanel() {
-  const { terminals, activeTerminalId, clearTerminal, isConnected, toggleAiPanel, addAiMessage } = useAppStore()
+  const { terminals, activeTerminalId, clearTerminal, isConnected, toggleAiPanel, addTerminal } = useAppStore()
   const activeTerminal = terminals.find((t) => t.id === activeTerminalId)
 
-  const [activeTab, setActiveTab] = useState<TerminalTabId>('serial')
+  const [activeTab, setActiveTab] = useState<TerminalTabId>(terminals[0]?.id || 'term-1')
 
   const serialRef = useRef<HTMLDivElement>(null)
   const outputRef = useRef<HTMLDivElement>(null)
@@ -45,6 +46,11 @@ export default function TerminalPanel() {
       term.open(shellRef.current)
       shellTerm.current = term
       shellFit.current = fit
+
+      if (!isElectron) {
+        term.writeln('\x1b[33m[Shell not available in browser mode]\x1b[0m')
+        return
+      }
       
       // Start node-pty
       ;(window as any).electronAPI.ptyStart().then(() => {
@@ -62,7 +68,7 @@ export default function TerminalPanel() {
 
       return () => {
         onDataDisposable.dispose()
-        removeListener()
+        removeListener?.()
         term.dispose()
         shellTerm.current = null
       }
@@ -82,6 +88,11 @@ export default function TerminalPanel() {
       serialTerm.current = term
       serialFit.current = fit
 
+      if (!isElectron) {
+        term.writeln('\x1b[33m[Serial monitor requires Electron desktop app]\x1b[0m')
+        return
+      }
+
       const onDataDisposable = term.onData((data) => {
         ;(window as any).electronAPI.sendTerminalInput(data)
       })
@@ -92,7 +103,7 @@ export default function TerminalPanel() {
 
       return () => {
         onDataDisposable.dispose()
-        removeListener()
+        removeListener?.()
         term.dispose()
         serialTerm.current = null
       }
@@ -145,9 +156,11 @@ export default function TerminalPanel() {
     const handleResize = () => {
       if (activeTab === 'terminal' && shellFit.current && shellTerm.current) {
         shellFit.current.fit()
-        ;(window as any).electronAPI.ptyResize(shellTerm.current.cols, shellTerm.current.rows)
+        if (isElectron) {
+          ;(window as any).electronAPI.ptyResize(shellTerm.current.cols, shellTerm.current.rows)
+        }
       }
-      if (activeTab === 'serial' && serialFit.current) serialFit.current.fit()
+      if (terminals.some(t => t.id === activeTab) && serialFit.current) serialFit.current.fit()
       if (activeTab === 'output' && outputFit.current) outputFit.current.fit()
     }
     window.addEventListener('resize', handleResize)
@@ -157,7 +170,7 @@ export default function TerminalPanel() {
 
   const copyCurrentTerminal = () => {
     let term: Terminal | null = null
-    if (activeTab === 'serial') term = serialTerm.current
+    if (terminals.some(t => t.id === activeTab)) term = serialTerm.current
     if (activeTab === 'terminal') term = shellTerm.current
     if (activeTab === 'output') term = outputTerm.current
 
@@ -171,7 +184,7 @@ export default function TerminalPanel() {
 
   const askAIToFix = () => {
     let term: Terminal | null = null
-    if (activeTab === 'serial') term = serialTerm.current
+    if (terminals.some(t => t.id === activeTab)) term = serialTerm.current
     if (activeTab === 'terminal') term = shellTerm.current
     if (activeTab === 'output') term = outputTerm.current
 
@@ -179,10 +192,7 @@ export default function TerminalPanel() {
     
     if (text) {
       if (!useAppStore.getState().aiPanelOpen) toggleAiPanel()
-      addAiMessage({
-        role: 'user',
-        content: `Please help me fix or explain this output:\n\n\`\`\`\n${text}\n\`\`\``
-      })
+      useAppStore.getState().setPendingAiPrompt(`Please help me fix or explain this terminal output:\n\n\`\`\`\n${text}\n\`\`\``)
     } else {
       useAppStore.getState().showNotification('Select text in terminal to ask AI', 'info')
     }
@@ -196,7 +206,34 @@ export default function TerminalPanel() {
         background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)',
         flexShrink: 0, height: 36, gap: 2, padding: '4px 4px 0',
       }}>
-        <div style={{ display: 'flex', flex: 1, gap: 2 }}>
+        <div style={{ display: 'flex', flex: 1, gap: 2, overflowX: 'auto', WebkitAppRegion: 'no-drag' } as any}>
+          {terminals.map((tab) => (
+            <button
+              key={tab.id}
+              className={`terminal-tab ${activeTab === tab.id ? 'active' : ''}`}
+              onClick={() => { setActiveTab(tab.id); useAppStore.getState().setActiveTerminal(tab.id); }}
+              style={{ position: 'relative' }}
+            >
+              <Radio size={13} />
+              <span>{tab.name}</span>
+              {terminals.length > 1 && (
+                <span 
+                  onClick={(e) => { 
+                    e.stopPropagation(); 
+                    useAppStore.getState().closeTerminal(tab.id); 
+                    if (activeTab === tab.id) {
+                      const newActive = terminals[0].id === tab.id ? terminals[1].id : terminals[0].id;
+                      setActiveTab(newActive); 
+                    }
+                  }} 
+                  style={{ marginLeft: 6, display: 'flex', alignItems: 'center', opacity: 0.5 }}
+                >
+                  <X size={11} />
+                </span>
+              )}
+            </button>
+          ))}
+
           {TERMINAL_TABS.map((tab) => (
             <button
               key={tab.id}
@@ -208,6 +245,15 @@ export default function TerminalPanel() {
               <span>{tab.label}</span>
             </button>
           ))}
+          {/* + button to spawn new terminal instance */}
+          <button
+            className="icon-btn"
+            title="New Terminal"
+            onClick={() => { addTerminal(); }}
+            style={{ width: 24, height: 24, margin: '2px 0', flexShrink: 0 }}
+          >
+            <Plus size={13} />
+          </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', padding: '0 6px', gap: 2, flexShrink: 0 }}>
           <button className="icon-btn" title="Ask AI About Selection" onClick={askAIToFix} style={{ width: 24, height: 24, color: 'var(--accent)' }}>
@@ -218,7 +264,7 @@ export default function TerminalPanel() {
           </button>
           <button className="icon-btn" title="Clear Terminal"
             onClick={() => {
-              if (activeTab === 'serial' && serialTerm.current) { serialTerm.current.clear(); clearTerminal(activeTerminalId) }
+              if (terminals.some(t => t.id === activeTab) && serialTerm.current) { serialTerm.current.clear(); clearTerminal(activeTerminalId) }
               if (activeTab === 'output' && outputTerm.current) { outputTerm.current.clear(); clearTerminal(activeTerminalId) }
               if (activeTab === 'terminal' && shellTerm.current) shellTerm.current.clear()
             }}
@@ -231,13 +277,13 @@ export default function TerminalPanel() {
 
       {/* Terminals Container */}
       <div style={{ flex: 1, position: 'relative', padding: '8px 4px 4px', overflow: 'hidden' }}>
-        <div ref={serialRef} style={{ width: '100%', height: '100%', display: activeTab === 'serial' ? 'block' : 'none', overflow: 'hidden' }} />
+        <div ref={serialRef} style={{ width: '100%', height: '100%', display: terminals.some(t => t.id === activeTab) ? 'block' : 'none', overflow: 'hidden' }} />
         <div ref={outputRef} style={{ width: '100%', height: '100%', display: activeTab === 'output' ? 'block' : 'none', overflow: 'hidden' }} />
         <div ref={shellRef} style={{ width: '100%', height: '100%', display: activeTab === 'terminal' ? 'block' : 'none', overflow: 'hidden' }} />
       </div>
 
       {/* Disconnected notice for serial */}
-      {!isConnected && activeTab === 'serial' && (
+      {!isConnected && terminals.some(t => t.id === activeTab) && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           padding: '8px 12px', fontSize: 12, color: 'var(--text-dim)',
