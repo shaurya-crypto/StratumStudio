@@ -21,35 +21,25 @@ async function generate(config, userPrompt, context, mode, activeFile, reference
   });
 
   if (!response.ok) {
-    throw { status: response.status, message: await response.text() };
+    const rawBody = await response.text();
+    let cleanMessage = rawBody;
+    try {
+      const parsed = JSON.parse(rawBody);
+      cleanMessage = parsed?.error?.message || rawBody;
+    } catch { /* use raw */ }
+
+    if (response.status === 403) {
+      cleanMessage = `Groq API access denied (403). Your API key may be invalid, expired, or your network/region may be blocked. Please verify your key at console.groq.com and check your internet connection.`;
+    } else if (response.status === 401) {
+      cleanMessage = `Groq API authentication failed (401). Your API key is invalid. Go to Tools > Settings to update it.`;
+    }
+
+    throw { status: response.status, message: cleanMessage };
   }
 
   const json = await response.json();
   const rawText = json.choices[0].message.content;
-  return parseMarkdownResponse(rawText);
+  return { type: "chat", payload: rawText };
 }
 
 module.exports = { generate };
-
-function parseMarkdownResponse(text) {
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
-  const codeBlocks = [];
-  let match;
-
-  while ((match = codeBlockRegex.exec(text)) !== null) {
-    codeBlocks.push({ language: match[1] || "python", code: match[2].trimEnd() });
-  }
-
-  const explanation = text.replace(codeBlockRegex, "").trim();
-
-  if (codeBlocks.length > 0) {
-    const primaryCode = codeBlocks.reduce((a, b) => a.code.length >= b.code.length ? a : b);
-    return {
-      type: "code_update",
-      code: primaryCode.code,
-      explanation: explanation || "Here are the code changes."
-    };
-  }
-
-  return { type: "chat", payload: text };
-}

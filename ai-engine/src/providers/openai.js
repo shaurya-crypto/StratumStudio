@@ -3,8 +3,9 @@ const { buildSystemPrompt } = require("./systemPrompt");
 async function generate(config, userPrompt, context, mode, activeFile, referencedFiles) {
   const modelVer = config.model || "gpt-4o";
   const systemText = buildSystemPrompt(context, mode, activeFile, referencedFiles);
+  const baseUrl = config.baseUrl || "https://api.openai.com/v1";
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -21,35 +22,27 @@ async function generate(config, userPrompt, context, mode, activeFile, reference
   });
 
   if (!response.ok) {
-    throw { status: response.status, message: await response.text() };
+    const rawBody = await response.text();
+    let cleanMessage = rawBody;
+    try {
+      const parsed = JSON.parse(rawBody);
+      cleanMessage = parsed?.error?.message || rawBody;
+    } catch { /* use raw */ }
+
+    if (response.status === 403 || response.status === 401) {
+      const providerName = config.baseUrl?.includes("openrouter") ? "OpenRouter"
+        : config.baseUrl?.includes("deepseek") ? "DeepSeek"
+        : config.baseUrl?.includes("mistral") ? "Mistral"
+        : "OpenAI";
+      cleanMessage = `${providerName} API access denied (${response.status}). Check your API key in Tools > Settings.`;
+    }
+
+    throw { status: response.status, message: cleanMessage };
   }
 
   const json = await response.json();
   const rawText = json.choices[0].message.content;
-  return parseMarkdownResponse(rawText);
+  return { type: "chat", payload: rawText };
 }
 
 module.exports = { generate };
-
-function parseMarkdownResponse(text) {
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
-  const codeBlocks = [];
-  let match;
-
-  while ((match = codeBlockRegex.exec(text)) !== null) {
-    codeBlocks.push({ language: match[1] || "python", code: match[2].trimEnd() });
-  }
-
-  const explanation = text.replace(codeBlockRegex, "").trim();
-
-  if (codeBlocks.length > 0) {
-    const primaryCode = codeBlocks.reduce((a, b) => a.code.length >= b.code.length ? a : b);
-    return {
-      type: "code_update",
-      code: primaryCode.code,
-      explanation: explanation || "Here are the code changes."
-    };
-  }
-
-  return { type: "chat", payload: text };
-}

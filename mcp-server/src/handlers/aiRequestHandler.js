@@ -6,7 +6,7 @@ const store = require("../store/contextStore");
 
 async function handleAiRequest(req, res) {
   try {
-    const userPrompt = req.body.prompt || "Please suggest code";
+    const userPrompt = req.body.userPrompt || req.body.prompt || "Please suggest code";
     const sessionId = req.body.sessionId;
     let explicitIntent = req.body.intent || "general_help";
     
@@ -74,6 +74,11 @@ async function handleAiRequest(req, res) {
     // Pass API limit errors back up to the Global RateLimiter fallback
     if (e.status === 429) {
       throw e;
+    }
+    
+    // Pass auth errors with proper status
+    if (e.status === 403 || e.status === 401) {
+      return res.status(e.status).json({ error: e.message || "API access denied" });
     }
     
     return res.status(500).json({ error: e.message || "Context processing failed" });

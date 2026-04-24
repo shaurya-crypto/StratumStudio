@@ -23,6 +23,9 @@ async function generate(payload) {
     if (response.error.type === "RATE_LIMIT") {
       throw { status: 429, message: response.error.message };  
     }
+    if (response.error.type === "AUTH_ERROR") {
+      throw { status: 403, message: response.error.message };
+    }
     throw new Error(`AI Engine Failure: ${response.error.message}`);
   }
 
