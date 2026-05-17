@@ -1,8 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
-  "appId": "com.electroai.electrocode",
+  "appId": "com.stratum.studio",
+  "publish": {
+    "provider": "github",
+    "owner": "shaurya-crypto",
+    "repo": "stratumstudio"
+  },
   "asar": true,
-  "productName": "Electro CODE",
+  "productName": "Stratum Studio",
   "forceCodeSigning": false,
   "afterPack": "./scripts/afterPack.cjs",
   "directories": {
@@ -65,7 +70,7 @@
     "deleteAppDataOnUninstall": false,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "ElectroCODE"
+    "shortcutName": "Stratum Studio"
   },
   "linux": {
     "target": ["AppImage", "deb"],

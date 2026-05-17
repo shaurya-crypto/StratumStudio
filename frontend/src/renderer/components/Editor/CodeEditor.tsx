@@ -2,6 +2,7 @@ import Editor, { DiffEditor } from '@monaco-editor/react'
 import { useAppStore } from '../../store/useAppStore'
 import { CheckCircle, XCircle } from 'lucide-react'
 import { sendMcpEvent } from '../../store/mcpClient'
+import { registerStratumProviders } from '../../../utils/monacoProviders'
 
 // ── MicroPython keyword & module database for IntelliSense ──
 const MICROPYTHON_KEYWORDS = [
@@ -217,10 +218,10 @@ export default function CodeEditor() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
 
-  const monacoTheme = theme === 'dark' ? 'electrocode-dark' : 'electrocode-light'
+  const monacoTheme = theme === 'dark' ? 'stratum-dark' : 'stratum-light'
 
   function defineThemes(monaco: any) {
-    monaco.editor.defineTheme('electrocode-dark', {
+    monaco.editor.defineTheme('stratum-dark', {
       base: 'vs-dark',
       inherit: true,
       rules: [
@@ -272,7 +273,7 @@ export default function CodeEditor() {
       },
     })
 
-    monaco.editor.defineTheme('electrocode-light', {
+    monaco.editor.defineTheme('stratum-light', {
       base: 'vs',
       inherit: true,
       rules: [
@@ -301,6 +302,7 @@ export default function CodeEditor() {
 
     // Register MicroPython IntelliSense providers
     registerMicroPythonProviders(monaco)
+    registerStratumProviders(monaco)
   }
 
   if (!activeTab) {
@@ -314,7 +316,7 @@ export default function CodeEditor() {
           letterSpacing: '-0.02em',
           fontFamily: 'var(--font-display)',
         }}>
-          ElectroCODE
+          Stratum Studio
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start' }}>
           {[
@@ -447,9 +449,10 @@ export default function CodeEditor() {
             inlineSuggest: { enabled: true },
             quickSuggestions: {
               other: true,
-              comments: false,
-              strings: false,
+              comments: true,
+              strings: true,
             },
+            wordBasedSuggestions: "currentDocument",
             folding: true,
             foldingStrategy: 'indentation',
             showFoldingControls: 'mouseover',

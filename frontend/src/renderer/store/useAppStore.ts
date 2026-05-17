@@ -413,6 +413,11 @@ interface AppStore {
   handleSaveClick: () => void;
   saveToLocal: () => Promise<void>;
   saveToDevice: () => Promise<void>;
+
+  // Libraries
+  libraries: string[];
+  refreshLibraries: () => Promise<void>;
+  installLibrary: (nameOrUrl: string) => Promise<void>;
 }
 
 let untitledCount = 1;
@@ -1147,31 +1152,78 @@ export const useAppStore = create<AppStore>()(
 
         await (window as any).electronAPI.stopMonitor();
 
-        const response = await (window as any).electronAPI.writeFile({
-          port: state.selectedPort,
-          filePath: devPath,
-          content: activeTab.content
-        });
-
-        if (response.success) {
-          state.updateTabMeta(activeTab.id, {
-            name: name.split('/').pop() || name,
+        try {
+          const response = await (window as any).electronAPI.writeFile({
+            port: state.selectedPort,
             filePath: devPath,
-            source: 'device'
+            content: activeTab.content
           });
-          state.saveTab(activeTab.id);
-          state.fetchDeviceFiles();
-        } else {
-          state.showNotification(`Failed: ${response.message}`, 'error');
+
+          if (response.success) {
+            state.updateTabMeta(activeTab.id, {
+              name: name.split('/').pop() || name,
+              filePath: devPath,
+              source: 'device'
+            });
+            state.saveTab(activeTab.id);
+            state.fetchDeviceFiles();
+          } else {
+            state.showNotification(`Failed: ${response.message}`, 'error');
+          }
+        } finally {
+          await (window as any).electronAPI.startMonitor({ port: state.selectedPort, baudRate: 115200 });
+        }
+      },
+
+        // Libraries
+        libraries: [],
+        refreshLibraries: async () => {
+        const p = get().openedFolderPath;
+        if (!p) return;
+        try {
+          const libPath = `${p}/lib`;
+          const existsResult = await (window as any).electronAPI.fsExists({ filePath: libPath });
+          if (existsResult?.exists) {
+            const files = await (window as any).electronAPI.readDir({ dirPath: libPath });
+            const libs = (files || [])
+              .filter((f: any) => f.type === 'file' && f.name.endsWith('.py'))
+              .map((f: any) => f.name);
+            set({ libraries: libs });
+          } else {
+            set({ libraries: [] });
+          }
+        } catch (e) {
+          console.error("Failed to refresh libraries", e);
+        }
+        },
+        installLibrary: async (nameOrUrl: string) => {
+        const p = get().openedFolderPath;
+        if (!p) {
+          get().showNotification("Open a folder first", "warning");
+          return;
+        }
+        get().showNotification(`Installing ${nameOrUrl}...`, "info");
+        try {
+          const result = await (window as any).electronAPI.installLibrary({
+            nameOrUrl,
+            workspacePath: p
+          });
+          if (result.success) {
+            get().showNotification(`Installed ${result.fileName}`, "success");
+            await get().refreshLibraries();
+            await get().refreshLocalFolder();
+          } else {
+            get().showNotification(`Failed: ${result.message}`, "error");
+          }
+        } catch (e: any) {
+          get().showNotification(`Error: ${e.message}`, "error");
+        }
         }
 
-        await (window as any).electronAPI.startMonitor({ port: state.selectedPort, baudRate: 115200 });
-      }
+        }),
 
-    }),
-
-    {
-      name: "electrocode-storage",
+        {
+      name: "stratum-studio-storage",
       partialize: (s) => ({
         setupComplete: s.setupComplete,
         // apiConfig excluded: now loaded from secure main-process JSON

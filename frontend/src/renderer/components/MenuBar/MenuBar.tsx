@@ -3,6 +3,7 @@ import { Minus, Square, X } from 'lucide-react'
 import { useAppStore } from '../../store/useAppStore'
 import { getLanguageFromFilename } from '../../utils/Fileicon'
 import { isElectron } from '../../utils/electron'
+import { LibraryManager } from './LibraryManager'
 
 interface MenuItem {
   label: string
@@ -95,6 +96,7 @@ useEffect(() => {
 
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [dropdownPos, setDropdownPos] = useState({ x: 0, y: 0 })
+  const [libManagerOpen, setLibManagerOpen] = useState(false)
 
   function open(name: string, e: React.MouseEvent) {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -134,7 +136,23 @@ useEffect(() => {
         store.showNotification('Failed to create file', 'error');
       }
     }},
-    { label: 'New Folder',        action: () => showNotification('Right-click in Explorer to create a folder', 'info') },
+    { label: 'New Folder',        action: async () => {
+      const store = useAppStore.getState();
+      const base = store.openedFolderPath;
+      if (!base) {
+        store.showNotification('Open a folder first to create folders. Use the Open Folder button.', 'warning');
+        return;
+      }
+      const name = await store.showPrompt('Folder name:');
+      if (!name) return;
+      const folderPath = base.replace(/\\/g, '/') + '/' + name;
+      const result = await (window as any).electronAPI?.createFolder?.({ folderPath });
+      if (result?.success) {
+        await store.refreshLocalFolder();
+      } else {
+        store.showNotification('Failed to create folder', 'error');
+      }
+    }},
     { separator: true },
     { label: 'Open File...',      shortcut: 'Ctrl+O', action: async () => {
       try {
@@ -256,7 +274,7 @@ useEffect(() => {
       showNotification('Package manager: connect firmware-tools', 'info')
     }},
     { label: 'Manage Libraries...', action: () => {
-      showNotification('Library manager: connect backend', 'info')
+      setLibManagerOpen(true)
     }},
     { separator: true },
     { label: 'New Terminal',       action: () => { addTerminal(); setTerminalOpen(true); } },
@@ -269,10 +287,10 @@ useEffect(() => {
     { label: 'MicroPython Reference', action: () => (window as any).electronAPI.openExternal('https://docs.micropython.org/en/latest/') },
     { label: 'Arduino Reference',    action: () => (window as any).electronAPI.openExternal('https://www.arduino.cc/reference/en/') },
     { separator: true },
-    { label: 'Report Issue',         action: () => (window as any).electronAPI.openExternal('https://github.com/shaurya-crypto/ElectroCODE/issues') },
+    { label: 'Report Issue',         action: () => (window as any).electronAPI.openExternal('https://github.com/shaurya-crypto/stratumstudio/issues') },
     { label: 'Check for Updates',    action: () => { showNotification('Up to date', 'success') }},
     { separator: true },
-    { label: 'About Electro CODE',   action: () => (window as any).electronAPI.openExternal('https://github.com/shaurya-crypto/ElectroCODE') },
+    { label: 'About Stratum Studio',   action: () => (window as any).electronAPI.openExternal('https://github.com/shaurya-crypto/stratumstudio') },
   ]
 
   const menus: { name: string; items: MenuEntry[] }[] = [
@@ -302,7 +320,7 @@ useEffect(() => {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: 9, fontWeight: 800, color: 'white', letterSpacing: '-0.05em',
         }}>
-          EC
+          SS
         </div>
       </div>
 
@@ -341,6 +359,8 @@ useEffect(() => {
           onClose={close}
         />
       )}
+
+      <LibraryManager isOpen={libManagerOpen} onClose={() => setLibManagerOpen(false)} />
     </div>
   )
 }

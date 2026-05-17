@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useAppStore } from './store/useAppStore'
 import EditorPage from './pages/EditorPage'
+import UpdatePrompt from './UpdatePrompt'
 import { isElectron, getElectronAPI } from './utils/electron'
 
 export default function App() {
@@ -78,5 +79,10 @@ export default function App() {
   }, [])
 
   // Always boot directly into the editor — no login gate
-  return <EditorPage />
+  return (
+    <>
+      <EditorPage />
+      <UpdatePrompt />
+    </>
+  )
 }

@@ -1,5 +1,28 @@
 import { app, BrowserWindow, ipcMain, dialog, safeStorage, shell } from "electron";
 import { fileURLToPath } from "node:url";
+import { autoUpdater } from "electron-updater";
+
+// Auto Updater Configuration
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = true;
+
+// Events → send to renderer
+autoUpdater.on("update-available", (info) => {
+  if (win) win.webContents.send("update:available", info);
+});
+autoUpdater.on("download-progress", (progress) => {
+  if (win) win.webContents.send("update:progress", progress);
+});
+autoUpdater.on("update-downloaded", () => {
+  if (win) win.webContents.send("update:downloaded");
+});
+autoUpdater.on("error", (err) => {
+  if (win) win.webContents.send("update:error", err.message);
+});
+
+// IPC handlers for auto updater
+ipcMain.on("update:download", () => autoUpdater.downloadUpdate());
+ipcMain.on("update:install", () => autoUpdater.quitAndInstall());
 import path from "node:path";
 import { exec, execSync, spawn, execFile, ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -1375,5 +1398,6 @@ if (gotTheLock) {
     setupIpcHandlers();
     startMcpServer();
     createWindow();
+    setTimeout(() => autoUpdater.checkForUpdates(), 3000);
   });
 }

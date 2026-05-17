@@ -1,92 +1,97 @@
-const { contextBridge, ipcRenderer } = require("electron");
-const listenerMap = /* @__PURE__ */ new WeakMap();
-contextBridge.exposeInMainWorld("ipcRenderer", {
-  on(channel, listener) {
-    const wrapped = (event, ...args) => listener(event, ...args);
-    listenerMap.set(listener, wrapped);
-    return ipcRenderer.on(channel, wrapped);
+const { contextBridge: a, ipcRenderer: i } = require("electron"), t = /* @__PURE__ */ new WeakMap();
+a.exposeInMainWorld("ipcRenderer", {
+  on(e, n) {
+    const o = (r, ...s) => n(r, ...s);
+    return t.set(n, o), i.on(e, o);
   },
-  off(channel, listener) {
-    const wrapped = listenerMap.get(listener);
-    if (wrapped) {
-      ipcRenderer.off(channel, wrapped);
-      listenerMap.delete(listener);
-    }
+  off(e, n) {
+    const o = t.get(n);
+    o && (i.off(e, o), t.delete(n));
   },
-  send(...args) {
-    const [channel, ...omit] = args;
-    return ipcRenderer.send(channel, ...omit);
+  send(...e) {
+    const [n, ...o] = e;
+    return i.send(n, ...o);
   },
-  invoke(...args) {
-    const [channel, ...omit] = args;
-    return ipcRenderer.invoke(channel, ...omit);
+  invoke(...e) {
+    const [n, ...o] = e;
+    return i.invoke(n, ...o);
   }
 });
-contextBridge.exposeInMainWorld("electronAPI", {
+a.exposeInMainWorld("electronAPI", {
   // Hardware
-  listPorts: () => ipcRenderer.invoke("hardware:listPorts"),
-  checkChip: (args) => ipcRenderer.invoke("hardware:checkChip", args),
-  startMonitor: (args) => ipcRenderer.invoke("hardware:startMonitor", args),
-  stopMonitor: () => ipcRenderer.invoke("hardware:stopMonitor"),
-  stopExecution: (args) => ipcRenderer.invoke("hardware:stopExecution", args),
-  flash: (args) => ipcRenderer.invoke("hardware:flash", args),
+  listPorts: () => i.invoke("hardware:listPorts"),
+  checkChip: (e) => i.invoke("hardware:checkChip", e),
+  startMonitor: (e) => i.invoke("hardware:startMonitor", e),
+  stopMonitor: () => i.invoke("hardware:stopMonitor"),
+  stopExecution: (e) => i.invoke("hardware:stopExecution", e),
+  flash: (e) => i.invoke("hardware:flash", e),
   // File System
-  openFolder: () => ipcRenderer.invoke("dialog:openFolder"),
-  openFile: () => ipcRenderer.invoke("dialog:openFile"),
-  saveFile: (args) => ipcRenderer.invoke("dialog:saveFile", args),
-  readDir: (args) => ipcRenderer.invoke("fs:readDir", args),
-  fsReadFile: (args) => ipcRenderer.invoke("fs:readFile", args),
-  createFile: (args) => ipcRenderer.invoke("fs:createFile", args),
-  createFolder: (args) => ipcRenderer.invoke("fs:createFolder", args),
-  fsDelete: (args) => ipcRenderer.invoke("fs:delete", args),
-  fsDeleteSafe: (args) => ipcRenderer.invoke("fs:deleteSafe", args),
-  fsExists: (args) => ipcRenderer.invoke("fs:exists", args),
-  fsWriteFile: (args) => ipcRenderer.invoke("fs:writeFile", args),
-  fsReadDeep: (args) => ipcRenderer.invoke("fs:readDeep", args),
-  fsRename: (args) => ipcRenderer.invoke("fs:rename", args),
+  openFolder: () => i.invoke("dialog:openFolder"),
+  openFile: () => i.invoke("dialog:openFile"),
+  saveFile: (e) => i.invoke("dialog:saveFile", e),
+  readDir: (e) => i.invoke("fs:readDir", e),
+  fsReadFile: (e) => i.invoke("fs:readFile", e),
+  createFile: (e) => i.invoke("fs:createFile", e),
+  createFolder: (e) => i.invoke("fs:createFolder", e),
+  fsDelete: (e) => i.invoke("fs:delete", e),
+  fsDeleteSafe: (e) => i.invoke("fs:deleteSafe", e),
+  fsExists: (e) => i.invoke("fs:exists", e),
+  fsWriteFile: (e) => i.invoke("fs:writeFile", e),
+  fsReadDeep: (e) => i.invoke("fs:readDeep", e),
+  fsRename: (e) => i.invoke("fs:rename", e),
   // API Config
-  saveApiSettings: (config) => ipcRenderer.invoke("saveApiSettings", config),
-  loadApiSettings: () => ipcRenderer.invoke("loadApiSettings"),
+  saveApiSettings: (e) => i.invoke("saveApiSettings", e),
+  loadApiSettings: () => i.invoke("loadApiSettings"),
   // Device File System (chip files)
-  listFiles: (args) => ipcRenderer.invoke("hardware:listFiles", args),
-  readFile: (args) => ipcRenderer.invoke("hardware:readFile", args),
-  writeFile: (args) => ipcRenderer.invoke("hardware:writeFile", args),
-  deleteFile: (args) => ipcRenderer.invoke("hardware:deleteFile", args),
-  renameFile: (args) => ipcRenderer.invoke("hardware:renameFile", args),
+  listFiles: (e) => i.invoke("hardware:listFiles", e),
+  readFile: (e) => i.invoke("hardware:readFile", e),
+  writeFile: (e) => i.invoke("hardware:writeFile", e),
+  deleteFile: (e) => i.invoke("hardware:deleteFile", e),
+  renameFile: (e) => i.invoke("hardware:renameFile", e),
   // AI
-  generateCode: (args) => ipcRenderer.invoke("ai:generate", args),
+  generateCode: (e) => i.invoke("ai:generate", e),
   // Window Controls
-  minimize: () => ipcRenderer.invoke("window:minimize"),
-  maximize: () => ipcRenderer.invoke("window:maximize"),
-  close: () => ipcRenderer.invoke("window:close"),
+  minimize: () => i.invoke("window:minimize"),
+  maximize: () => i.invoke("window:maximize"),
+  close: () => i.invoke("window:close"),
   // Terminal output events
-  onTerminalOutput: (cb) => {
-    const handler = (_, data) => cb(data);
-    ipcRenderer.on("terminal-output", handler);
-    return () => ipcRenderer.off("terminal-output", handler);
+  onTerminalOutput: (e) => {
+    const n = (o, r) => e(r);
+    return i.on("terminal-output", n), () => i.off("terminal-output", n);
   },
   // Terminal REPL input — send keystrokes to device
-  sendTerminalInput: (data) => ipcRenderer.invoke("terminal:sendInput", data),
+  sendTerminalInput: (e) => i.invoke("terminal:sendInput", e),
   // PTY Shell API
-  ptyStart: (workspacePath) => ipcRenderer.invoke("pty:start", workspacePath),
-  ptyInput: (data) => ipcRenderer.invoke("pty:input", data),
-  ptyResize: (cols, rows) => ipcRenderer.invoke("pty:resize", { cols, rows }),
-  onPtyOutput: (cb) => {
-    const handler = (_, data) => cb(data);
-    ipcRenderer.on("pty:output", handler);
-    return () => ipcRenderer.off("pty:output", handler);
+  ptyStart: (e) => i.invoke("pty:start", e),
+  ptyInput: (e) => i.invoke("pty:input", e),
+  ptyResize: (e, n) => i.invoke("pty:resize", { cols: e, rows: n }),
+  onPtyOutput: (e) => {
+    const n = (o, r) => e(r);
+    return i.on("pty:output", n), () => i.off("pty:output", n);
   },
   // Firmware installation
-  listVolumes: () => ipcRenderer.invoke("firmware:listVolumes"),
-  installFirmware: (args) => ipcRenderer.invoke("firmware:install", args),
-  downloadFirmware: (args) => ipcRenderer.invoke("firmware:download", args),
-  onFirmwareProgress: (cb) => {
-    const handler = (_, data) => cb(data);
-    ipcRenderer.on("firmware-progress", handler);
-    return () => ipcRenderer.off("firmware-progress", handler);
+  listVolumes: () => i.invoke("firmware:listVolumes"),
+  installFirmware: (e) => i.invoke("firmware:install", e),
+  downloadFirmware: (e) => i.invoke("firmware:download", e),
+  onFirmwareProgress: (e) => {
+    const n = (o, r) => e(r);
+    return i.on("firmware-progress", n), () => i.off("firmware-progress", n);
   },
   // Reset / Sign Out
-  resetApiSettings: () => ipcRenderer.invoke("resetApiSettings"),
+  resetApiSettings: () => i.invoke("resetApiSettings"),
+  // Library Manager
+  searchLibraries: (e) => i.invoke("lib:search", e),
+  installLibrary: (e) => i.invoke("lib:install", e),
+  // uninstallLibrary: (args: any) => ipcRenderer.invoke("lib:uninstall", args),
+  // getInstallPath: () => ipcRenderer.invoke("lib:getInstallPath"), 
   // Shell
-  openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url)
+  openExternal: (e) => i.invoke("shell:openExternal", e)
+});
+a.exposeInMainWorld("updater", {
+  onAvailable: (e) => i.on("update:available", (n, o) => e(o)),
+  onProgress: (e) => i.on("update:progress", (n, o) => e(o)),
+  onDownloaded: (e) => i.on("update:downloaded", () => e()),
+  onError: (e) => i.on("update:error", (n, o) => e(o)),
+  download: () => i.send("update:download"),
+  install: () => i.send("update:install")
 });

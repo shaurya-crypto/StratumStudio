@@ -25,6 +25,7 @@ function extractActions(text: string) {
     const typeMatch = attrString.match(/type=["']([^"']+)["']/i);
     const targetMatch = attrString.match(/target=["']([^"']+)["']/i);
     const pathMatch = attrString.match(/path=["']([^"']+)["']/i);
+    const packageMatch = attrString.match(/package=["']([^"']+)["']/i);
 
     if (!typeMatch) continue;
 
@@ -32,7 +33,7 @@ function extractActions(text: string) {
       id: `act-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: typeMatch[1],
       target: targetMatch?.[1],
-      path: pathMatch?.[1],
+      path: pathMatch?.[1] || packageMatch?.[1],
       content,
       status: 'pending'
     });
@@ -45,6 +46,6 @@ function extractActions(text: string) {
   strippedText = strippedText.replace(/```[\w]*\s*\n?\s*```/g, '');
   strippedText = strippedText.replace(/\n{3,}/g, '\n\n').trim();
 
-  console.log(`[ElectroCODE:Parser] Found ${actions.length} actions:`, actions.map(a => `${a.type}:${a.path}`));
+  console.log(`[StratumStudio:Parser] Found ${actions.length} actions:`, actions.map(a => `${a.type}:${a.path}`));
   return { strippedText, actions };
 }

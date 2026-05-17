@@ -104,6 +104,36 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Reset / Sign Out
   resetApiSettings: () => ipcRenderer.invoke("resetApiSettings"),
 
+  // Library Manager
+  searchLibraries: (args: any) => ipcRenderer.invoke("lib:search", args),
+  installLibrary: (args: any) => ipcRenderer.invoke("lib:install", args),
+  // uninstallLibrary: (args: any) => ipcRenderer.invoke("lib:uninstall", args),
+  // getInstallPath: () => ipcRenderer.invoke("lib:getInstallPath"), 
+
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke("shell:openExternal", url),
 });
+
+contextBridge.exposeInMainWorld("updater", {
+  onAvailable: (cb: (info: any) => void) => ipcRenderer.on("update:available", (_: any, i: any) => cb(i)),
+  onProgress:  (cb: (p: any) => void) => ipcRenderer.on("update:progress", (_: any, p: any) => cb(p)),
+  onDownloaded:(cb: () => void) => ipcRenderer.on("update:downloaded", () => cb()),
+  onError:     (cb: (e: string) => void) => ipcRenderer.on("update:error", (_: any, e: any) => cb(e)),
+  download: () => ipcRenderer.send("update:download"),
+  install:  () => ipcRenderer.send("update:install"),
+});
+
+declare global {
+  interface Window {
+    updater: {
+      onAvailable: (cb: (info: any) => void) => void;
+      onProgress:  (cb: (p: any) => void) => void;
+      onDownloaded:(cb: () => void) => void;
+      onError:     (cb: (e: string) => void) => void;
+      download: () => void;
+      install:  () => void;
+    };
+  }
+}
+
+export {};

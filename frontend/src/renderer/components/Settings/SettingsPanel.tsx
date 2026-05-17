@@ -365,8 +365,8 @@ export default function SettingsPanel() {
                   ))}
                 </select>
                 {model === 'auto' && (
-                  <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-dim)' }}>
-                    ElectroCODE will automatically select the best model based on prompt complexity
+                  <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+                    Stratum Studio will automatically select the best model based on prompt complexity
                   </div>
                 )}
               </div>
@@ -381,7 +381,7 @@ export default function SettingsPanel() {
                 marginBottom: 18,
                 lineHeight: 1.6,
               }}>
-                API keys are stored locally in ElectroCODE's encrypted settings.
+                API keys are stored locally in Stratum Studio's encrypted settings.
                 They are proxied through the local backend and never exposed to the renderer.
               </div>
 

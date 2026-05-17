@@ -2,6 +2,7 @@ import { useRef, useEffect, useState } from 'react'
 import { Trash2, Zap, Copy, Radio, SquareTerminal, FileOutput, Plus, X } from 'lucide-react'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import 'xterm/css/xterm.css'
 import { useAppStore } from '../../store/useAppStore'
 import { isElectron } from '../../utils/electron'
@@ -43,6 +44,11 @@ export default function TerminalPanel() {
       })
       const fit = new FitAddon()
       term.loadAddon(fit)
+      const webLinks = new WebLinksAddon((_event, uri) => {
+        if (isElectron) (window as any).electronAPI.openExternal(uri);
+        else window.open(uri, '_blank');
+      });
+      term.loadAddon(webLinks)
       term.open(shellRef.current)
       shellTerm.current = term
       shellFit.current = fit
@@ -84,6 +90,11 @@ export default function TerminalPanel() {
       })
       const fit = new FitAddon()
       term.loadAddon(fit)
+      const webLinks = new WebLinksAddon((_event, uri) => {
+        if (isElectron) (window as any).electronAPI.openExternal(uri);
+        else window.open(uri, '_blank');
+      });
+      term.loadAddon(webLinks)
       term.open(serialRef.current)
       serialTerm.current = term
       serialFit.current = fit
@@ -119,8 +130,13 @@ export default function TerminalPanel() {
       })
       const fit = new FitAddon()
       term.loadAddon(fit)
+      const webLinks = new WebLinksAddon((_event, uri) => {
+        if (isElectron) (window as any).electronAPI.openExternal(uri);
+        else window.open(uri, '_blank');
+      });
+      term.loadAddon(webLinks)
       term.open(outputRef.current)
-      term.writeln('\x1b[35m[ElectroCODE IDE System Output]\x1b[0m')
+      term.writeln('\x1b[35m[Stratum Studio IDE System Output]\x1b[0m')
       outputTerm.current = term
       outputFit.current = fit
 

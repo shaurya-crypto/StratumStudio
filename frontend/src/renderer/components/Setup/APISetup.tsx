@@ -22,7 +22,7 @@ export default function LoginScreen() {
 
     // Open the authentication website in the system browser
     if ((window as any).electronAPI?.openExternal) {
-      (window as any).electronAPI.openExternal('https://auth.electrocode.dev')
+      (window as any).electronAPI.openExternal('https://auth.stratum-studio.dev')
     }
 
     // Simulate login success with a 1.5-second timeout
@@ -56,10 +56,10 @@ export default function LoginScreen() {
       <div className="login-card">
         {/* Logo */}
         <div className="login-logo">
-          <span style={{ fontSize: 22, letterSpacing: '-0.04em' }}>E</span>
+          <span style={{ fontSize: 22, letterSpacing: '-0.04em' }}>S</span>
         </div>
 
-        <h1 className="login-title">ElectroCODE</h1>
+        <h1 className="login-title">Stratum Studio</h1>
         <p className="login-subtitle">
           AI-Powered IDE for Microcontrollers
         </p>
@@ -89,7 +89,7 @@ export default function LoginScreen() {
         </button>
 
         <div className="login-footer">
-          By continuing, you agree to the ElectroCODE Terms of Service.
+          By continuing, you agree to the Stratum Studio Terms of Service.
         </div>
       </div>
     </div>

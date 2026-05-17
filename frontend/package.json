@@ -1,7 +1,7 @@
 {
   "name": "frontend",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "An AI-powered Firmware Installer and IDE for Microcontrollers",
   "author": "Shaurya",
   "type": "module",
@@ -18,7 +18,9 @@
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
     "clsx": "^2.1.1",
+    "electron-updater": "^6.8.3",
     "lucide-react": "^1.7.0",
     "node-pty": "^1.1.0",
     "react": "^18.2.0",

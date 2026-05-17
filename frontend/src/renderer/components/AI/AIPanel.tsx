@@ -4,7 +4,7 @@ import {
   Terminal as TerminalIcon, FileText, ChevronDown, ChevronRight,
   FolderTree, FileCode, Sparkles, CheckCircle2, XCircle,
   Clock, MessageSquare, Key, ExternalLink, Settings, Play,
-  Shield, ShieldAlert
+  Shield, ShieldAlert, Package
 } from 'lucide-react'
 import { useAppStore, AIMessage, FileNode, AIProvider } from '../../store/useAppStore'
 import { currentSessionId } from '../../store/mcpClient'
@@ -333,7 +333,7 @@ function MessageBlock({ msg }: { msg: AIMessage }) {
           color: msg.role === 'user' ? 'var(--text-muted)' : 'var(--accent)',
           letterSpacing: '0.04em',
         }}>
-          {msg.role === 'user' ? 'You' : 'ElectroCODE Agent'}
+          {msg.role === 'user' ? 'You' : 'Stratum Agent'}
         </span>
       </div>
       {parts.map((part, i) => {
@@ -580,7 +580,7 @@ function APIKeyModal({ onClose }: { onClose: () => void }) {
           </select>
           {model === 'auto' && (
             <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-dim)' }}>
-              ElectroCODE will automatically pick the best model for each task
+              Stratum Studio will automatically pick the best model for each task
             </div>
           )}
         </div>
@@ -663,7 +663,7 @@ function extractActions(text: string) {
   strippedText = strippedText.replace(/```[\w]*\s*\n?\s*```/g, '');
   strippedText = strippedText.replace(/\n{3,}/g, '\n\n').trim();
 
-  console.log(`[ElectroCODE:Parser] Found ${actions.length} actions:`, actions.map(a => `${a.type}:${a.path}`));
+  console.log(`[StratumStudio:Parser] Found ${actions.length} actions:`, actions.map(a => `${a.type}:${a.path}`));
   return { strippedText, actions };
 }
 
@@ -674,16 +674,17 @@ function ActionBlock({ action }: { action: any }) {
   const { 
     updateAiAction, removeAiAction, openedFolderPath, isElectron,
     selectedPort, interpreter, ptyInput,
-    aiActionSetting, setAiSuggestion
+    aiActionSetting, setAiSuggestion,
+    installLibrary
   } = useAppStore()
   const [diskContent, setDiskContent] = useState('');
 
   useEffect(() => {
-    // Auto-execute if policy is 'automatic' and status is 'pending'
-    if (aiActionSetting === 'automatic' && action.status === 'pending') {
+    // Auto-execute if policy is 'automatic', status is 'pending', for 'write' or 'install' actions
+    if (aiActionSetting === 'automatic' && action.status === 'pending' && (action.type === 'write' || action.type === 'install')) {
       executeAction();
     }
-  }, [aiActionSetting, action.status]);
+  }, [aiActionSetting, action.status, action.type]);
 
   useEffect(() => {
     // If it's a 'write' action, check if it exists so we can diff it
@@ -718,7 +719,7 @@ function ActionBlock({ action }: { action: any }) {
       if (openedFolderPath && !fullPath.includes(':\\') && !fullPath.startsWith('/')) {
         fullPath = `${openedFolderPath}/${fullPath}`;
       }
-      console.log(`[ElectroCODE:Action] Executing ${action.type} → "${fullPath}"`, { content: action.content?.substring(0, 100) })
+      console.log(`[StratumStudio:Action] Executing ${action.type} → "${fullPath || action.path}"`, { content: action.content?.substring(0, 100) })
       
       if (action.type === 'write') {
         if (action.target === 'hardware') {
@@ -727,6 +728,9 @@ function ActionBlock({ action }: { action: any }) {
         } else {
           res = await (window as any).electronAPI.fsWriteFile({ filePath: fullPath, content: action.content });
         }
+      } else if (action.type === 'install') {
+        await installLibrary(action.path);
+        res = { success: true };
       } else if (action.type === 'delete') {
         if (action.target === 'hardware') {
           if (!selectedPort) throw new Error("No device connected. Select a port first.");
@@ -754,21 +758,32 @@ function ActionBlock({ action }: { action: any }) {
          });
       }
 
-      console.log(`[ElectroCODE:Action] Result for ${action.type}:`, res)
+      console.log(`[StratumStudio:Action] Result for ${action.type}:`, res)
 
       if (res && res.success) {
         updateAiAction(action.id, { status: 'success' });
         
         // Refresh the file tree and currently open tab if it was updated
-        if (action.type === 'write' || action.type === 'delete') {
+        if (action.type === 'write' || action.type === 'delete' || action.type === 'install') {
           const store = useAppStore.getState();
           if (action.target === 'hardware') store.fetchDeviceFiles();
           else store.refreshLocalFolder();
           
-          if (action.type === 'write' && action.content) {
+          if (action.type === 'write') {
             const openTab = store.tabs.find(t => t.name === action.path || t.filePath === action.path || (fullPath && t.filePath === fullPath));
             if (openTab) {
-               store.updateContent(openTab.id, action.content);
+               let freshContent = action.content || '';
+               try {
+                 if (action.target === 'hardware') {
+                   const deviceRead = await (window as any).electronAPI.readFile({ port: selectedPort, filePath: action.path });
+                   if (deviceRead?.success && deviceRead.content !== undefined) freshContent = deviceRead.content;
+                 } else {
+                   const localRead = await (window as any).electronAPI.fsReadFile({ filePath: fullPath });
+                   if (localRead?.content !== undefined) freshContent = localRead.content;
+                   else if (typeof localRead === 'string') freshContent = localRead;
+                 }
+               } catch(e) { console.warn('[StratumStudio:LiveSync] Live read failed, falling back to action.content', e) }
+               store.updateContent(openTab.id, freshContent);
             }
           }
         }
@@ -778,7 +793,7 @@ function ActionBlock({ action }: { action: any }) {
          throw new Error(res?.error || res?.message || "Execution failed");
       }
     } catch (e: any) {
-      console.error(`[ElectroCODE:Action] FAILED ${action.type} → ${action.path}:`, e)
+      console.error(`[StratumStudio:Action] FAILED ${action.type} → ${action.path}:`, e)
       updateAiAction(action.id, { status: 'error', errorMessage: e.message });
     }
   }
@@ -806,10 +821,13 @@ function ActionBlock({ action }: { action: any }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {action.type === 'write' ? <FileCode size={14} color="var(--accent)" /> :
            action.type === 'delete' ? <Trash2 size={14} color="var(--red)" /> :
+           action.type === 'install' ? <Package size={14} color="var(--accent)" /> :
            <Play size={14} color="var(--green)" />}
           
           <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>
-            {action.type === 'write' ? 'Write File' : action.type === 'delete' ? 'Delete File' : 'Execute'} 
+            {action.type === 'write' ? 'Write File' : 
+             action.type === 'delete' ? 'Delete File' : 
+             action.type === 'install' ? 'Install Library' : 'Execute'} 
           </span>
           {action.path && (
             <span style={{ fontSize: 12, color: 'var(--text-muted)', fontFamily: 'var(--font-code)' }}>
@@ -887,7 +905,7 @@ export default function AIPanel() {
     addAiMessage, clearAiMessages, newChat, switchChat,
     aiLoading, setAiLoading,
     toggleAiPanel,
-    tabs, 
+    tabs, activeTabId,
     fileTree, openedFolderPath,
     aiSuggestion, acceptSuggestion, declineSuggestion,
     pendingAiPrompt, setPendingAiPrompt,
@@ -973,44 +991,84 @@ export default function AIPanel() {
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
-    el.style.height = '36px'  // Reset to minimum before measuring
+    el.style.height = 'auto'  // Force reflow to recalculate shrink
     const newHeight = Math.max(36, Math.min(el.scrollHeight, 200))
     el.style.height = newHeight + 'px'
   }, [input])
 
   async function resolveFileContents(prompt: string): Promise<string> {
-    const mentionRegex = /@([a-zA-Z0-9._\-\/]+)/g
+    const mentionRegex = /@([a-zA-Z0-9._\-\/\\:]+)/g
     const matches = [...prompt.matchAll(mentionRegex)]
     const references: string[] = []
     const resolved: string[] = []
+
+    // Helper functions for path resolution
+    const isAbsolutePath = (p: string) => /^[a-zA-Z]:/.test(p) || p.startsWith('/') || p.startsWith('\\');
+    const getDirname = (p: string) => {
+      const lastSlash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+      return lastSlash === -1 ? '' : p.substring(0, lastSlash);
+    };
+    const joinPaths = (base: string, rel: string) => {
+      if (!base) return rel;
+      const baseSlash = base.endsWith('/') || base.endsWith('\\');
+      const relSlash = rel.startsWith('/') || rel.startsWith('\\');
+      if (baseSlash && relSlash) return base + rel.substring(1);
+      if (!baseSlash && !relSlash) return base + '/' + rel;
+      return base + rel;
+    };
+
+    const activeTab = tabs.find(t => t.id === activeTabId);
+    const activeFile = activeTab?.filePath;
 
     for (const match of matches) {
       const mentionName = match[1]
       if (mentionName === 'terminal' || references.includes(mentionName)) continue
       references.push(mentionName)
 
+      // 1. Check if it's already an open tab (either matching the filename or file path ends with mentionName)
       const tab = tabs.find(t => t.name === mentionName || t.filePath?.endsWith(mentionName))
       if (tab) { resolved.push(`[File: ${mentionName}]\n${tab.content}`); continue }
 
-      if (openedFolderPath && isElectron) {
-        try {
-          const fullPath = `${openedFolderPath}/${mentionName}`
-          
-          // Check if it's a folder using fs:exists / fs:readDir conceptually
-          // We can use fs:readDeep to cleanly pull its content
-          const result = await (window as any).electronAPI.fsReadDeep({ folderPath: fullPath })
-          if (Array.isArray(result) && result.length > 0) {
-            resolved.push(`[Directory: ${mentionName}]\n` + result.map(file => `#### FILE: ${file.path}\n\`\`\`\n${file.content}\n\`\`\``).join('\n\n'))
-            continue;
-          }
+      if (isElectron) {
+        // Collect candidate paths
+        const pathsToTry: string[] = [];
 
-          // If not a folder or empty folder, try reading as a single file
-          const singleFileResult = await (window as any).electronAPI.fsReadFile({ filePath: fullPath })
-          if (singleFileResult?.content || typeof singleFileResult === 'string') {
-            const contentString = typeof singleFileResult === 'string' ? singleFileResult : singleFileResult.content;
-            resolved.push(`[File: ${mentionName}]\n${contentString}`)
+        if (isAbsolutePath(mentionName)) {
+          pathsToTry.push(mentionName);
+        } else {
+          // Relative to active tab folder
+          if (activeFile) {
+            const activeDir = getDirname(activeFile);
+            pathsToTry.push(joinPaths(activeDir, mentionName));
+            pathsToTry.push(joinPaths(getDirname(activeDir), mentionName));
           }
-        } catch { /* silently skip */ }
+          // Relative to workspace
+          if (openedFolderPath) {
+            pathsToTry.push(joinPaths(openedFolderPath, mentionName));
+            pathsToTry.push(joinPaths(getDirname(openedFolderPath), mentionName));
+          }
+        }
+
+        for (const fullPath of pathsToTry) {
+          try {
+            // Check if it's a directory by reading deep
+            const result = await (window as any).electronAPI.fsReadDeep({ folderPath: fullPath })
+            if (Array.isArray(result) && result.length > 0) {
+              resolved.push(`[Directory: ${mentionName}]\n` + result.map(file => `#### FILE: ${file.path}\n\`\`\`\n${file.content}\n\`\`\``).join('\n\n'))
+              break;
+            }
+
+            // Check if it's a single file
+            const singleFileResult = await (window as any).electronAPI.fsReadFile({ filePath: fullPath })
+            if (singleFileResult !== null && (singleFileResult?.content || typeof singleFileResult === 'string')) {
+              const contentString = typeof singleFileResult === 'string' ? singleFileResult : singleFileResult.content;
+              resolved.push(`[File: ${mentionName}]\n${contentString}`)
+              break;
+            }
+          } catch {
+            // continue trying other paths
+          }
+        }
       }
     }
 
@@ -1062,7 +1120,7 @@ export default function AIPanel() {
         throw new Error('Invalid response from AI service — check if MCP server is running')
 
       const data = response.response_text
-      console.log('[ElectroCODE:AI] Raw response_text:', data)
+      console.log('[StratumStudio:AI] Raw response_text:', data)
 
       let responseContent = '';
       if (typeof data === 'string') responseContent = data;
@@ -1072,12 +1130,12 @@ export default function AIPanel() {
         responseContent = explanation; // AI actions parsing replaces the code update logic
       } else responseContent = data.payload || data.response_text || 'Completed.';
 
-      console.log('[ElectroCODE:AI] Extracted responseContent length:', responseContent.length)
+      console.log('[StratumStudio:AI] Extracted responseContent length:', responseContent.length)
 
       // Parse and extract <action> tags natively bypassing the previous AI rules
       const { strippedText, actions } = extractActions(responseContent);
 
-      console.log('[ElectroCODE:AI] Parsed actions:', actions.length, actions.map(a => `${a.type}:${a.path}`))
+      console.log('[StratumStudio:AI] Parsed actions:', actions.length, actions.map(a => `${a.type}:${a.path}`))
 
       addAiMessage({ role: 'assistant', content: strippedText || 'Executed actions.' })
 
@@ -1144,7 +1202,7 @@ export default function AIPanel() {
           <Bot size={15} style={{ color: 'var(--accent)' }} />
         </div>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.2 }}>ElectroCODE Agent</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.2 }}>Stratum Agent</div>
           <div style={{ fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.2 }}>Your AI hardware engineer</div>
         </div>
         <button className="icon-btn" onClick={() => setApiKeyModalOpen(true)} title="API Settings"><Settings size={13} /></button>
@@ -1330,7 +1388,7 @@ export default function AIPanel() {
           <textarea
             ref={textareaRef} value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKey} onFocus={handleInputFocus}
-            placeholder={!hasApiKey ? 'Click to set up AI provider...' : 'Ask ElectroCODE for help... (Type @ to mention files)'}
+            placeholder={!hasApiKey ? 'Click to set up AI provider...' : 'Ask Stratum for help... (Type @ to mention files)'}
             rows={1}
             style={{
               flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none',
