@@ -58,6 +58,8 @@ export default function DevicePanel() {
         port: selectedPort,
       });
 
+      store.setLastDetectedChip(check?.detected ?? null);
+
       if (!check?.connected) {
         // Suppress simple notification, use strong blocking overlay instead
         store.showErrorOverlay(check?.message ?? "Chip not connected. Check physical connection and port.");
@@ -66,10 +68,19 @@ export default function DevicePanel() {
         return;
       }
 
+      const mismatch = store.checkBoardMismatch();
+      if (mismatch) {
+        store.showErrorOverlay(mismatch);
+        addTerminalLine(activeTerminalId, mismatch);
+        store.unlockDevice();
+        return;
+      }
+
       setConnected(true);
+      const detectedMsg = check?.detected && check.detected !== 'unknown' ? ` [Detected: ${check.detected}]` : '';
       addTerminalLine(
         activeTerminalId,
-        `Connected to ${selectedPort} — ${interpreter.chip} (${interpreter.langDisplay})`,
+        `Connected to ${selectedPort} — ${interpreter.chip} (${interpreter.langDisplay})${detectedMsg}`,
       );
       showNotification(`Fetching device files...`, "info");
       
@@ -160,6 +171,34 @@ export default function DevicePanel() {
               </div>
             </div>
           )}
+          {interpreter && (
+            <button
+              onClick={() => useAppStore.getState().createNewProjectTemplate()}
+              style={{
+                width: '100%',
+                marginTop: 6,
+                padding: '6px 10px',
+                background: 'var(--bg-input)',
+                border: '1px dashed var(--border-light)',
+                color: 'var(--primary)',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 500,
+                borderRadius: 'var(--radius)',
+                transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'var(--primary-glow)';
+                e.currentTarget.style.borderColor = 'var(--primary)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'var(--bg-input)';
+                e.currentTarget.style.borderColor = 'var(--border-light)';
+              }}
+            >
+              + Create Board Template
+            </button>
+          )}
         </div>
 
         {/* Port */}
@@ -174,6 +213,22 @@ export default function DevicePanel() {
           >
             <span className="form-label" style={{ margin: 0 }}>
               Port
+            </span>
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                padding: "2px 8px",
+                background: "var(--bg-elevated)",
+                border: "1px solid var(--border)",
+                borderRadius: 12,
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                color: "var(--text-primary)",
+              }}
+            >
+              {interpreter ? `${interpreter.language === 'arduino' ? '🔵' : '🟢'} ${interpreter.label}` : '⚠️ No Board'}
             </span>
             <button
               className="icon-btn"

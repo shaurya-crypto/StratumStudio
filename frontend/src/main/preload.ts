@@ -36,6 +36,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   stopMonitor: () => ipcRenderer.invoke("hardware:stopMonitor"),
   stopExecution: (args: any) => ipcRenderer.invoke("hardware:stopExecution", args),
   flash: (args: any) => ipcRenderer.invoke("hardware:flash", args),
+  checkArduinoCli: () => ipcRenderer.invoke("hardware:checkArduinoCli"),
+  installArduinoCli: () => ipcRenderer.invoke("hardware:installArduinoCli"),
+  checkMpremote: () => ipcRenderer.invoke("hardware:checkMpremote"),
+  installMpremote: () => ipcRenderer.invoke("hardware:installMpremote"),
 
   // File System
   openFolder: () => ipcRenderer.invoke("dialog:openFolder"),

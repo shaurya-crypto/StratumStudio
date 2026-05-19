@@ -16,7 +16,7 @@ interface LibraryManagerProps {
 }
 
 export const LibraryManager: React.FC<LibraryManagerProps> = ({ isOpen, onClose }) => {
-  const { libraries, refreshLibraries, installLibrary, openedFolderPath, showNotification } = useAppStore();
+  const { libraries, refreshLibraries, installLibrary, openedFolderPath, showNotification, interpreter } = useAppStore();
   const [installInput, setInstallInput] = useState('');
   const [isInstalling, setIsInstalling] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -58,7 +58,10 @@ export const LibraryManager: React.FC<LibraryManagerProps> = ({ isOpen, onClose 
     searchTimerRef.current = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const result = await (window as any).electronAPI.searchLibraries({ query: value.trim() });
+        const result = await (window as any).electronAPI.searchLibraries({
+          query: value.trim(),
+          language: interpreter ? interpreter.language : 'micropython'
+        });
         if (result.success && result.packages) {
           setSearchResults(result.packages);
           setShowResults(true);

@@ -1,7 +1,7 @@
 const { contextBridge: a, ipcRenderer: i } = require("electron"), t = /* @__PURE__ */ new WeakMap();
 a.exposeInMainWorld("ipcRenderer", {
   on(e, n) {
-    const o = (r, ...s) => n(r, ...s);
+    const o = (r, ...l) => n(r, ...l);
     return t.set(n, o), i.on(e, o);
   },
   off(e, n) {
@@ -25,6 +25,10 @@ a.exposeInMainWorld("electronAPI", {
   stopMonitor: () => i.invoke("hardware:stopMonitor"),
   stopExecution: (e) => i.invoke("hardware:stopExecution", e),
   flash: (e) => i.invoke("hardware:flash", e),
+  checkArduinoCli: () => i.invoke("hardware:checkArduinoCli"),
+  installArduinoCli: () => i.invoke("hardware:installArduinoCli"),
+  checkMpremote: () => i.invoke("hardware:checkMpremote"),
+  installMpremote: () => i.invoke("hardware:installMpremote"),
   // File System
   openFolder: () => i.invoke("dialog:openFolder"),
   openFile: () => i.invoke("dialog:openFile"),

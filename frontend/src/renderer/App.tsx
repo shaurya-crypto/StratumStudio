@@ -75,7 +75,7 @@ export default function App() {
           console.warn(`[Auto-Init] Connection check failed: ${e.message}`);
         }
       }
-    }, 5000);
+    }, 3000);
   }, [])
 
   // Always boot directly into the editor — no login gate

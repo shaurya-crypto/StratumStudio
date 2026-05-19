@@ -210,6 +210,119 @@ function registerMicroPythonProviders(monaco: any) {
   })
 }
 
+// ── Arduino C++ IntelliSense ──
+
+const ARDUINO_FUNCTIONS = [
+  { label: 'digitalWrite', insert: 'digitalWrite(${1:pin}, ${2:value});', detail: 'Write HIGH or LOW to a digital pin' },
+  { label: 'digitalRead', insert: 'digitalRead(${1:pin})', detail: 'Read value from digital pin' },
+  { label: 'analogWrite', insert: 'analogWrite(${1:pin}, ${2:value});', detail: 'Write PWM value (0-255)' },
+  { label: 'analogRead', insert: 'analogRead(${1:pin})', detail: 'Read analog value (0-1023)' },
+  { label: 'pinMode', insert: 'pinMode(${1:pin}, ${2:mode});', detail: 'Set pin direction (INPUT/OUTPUT)' },
+  { label: 'delay', insert: 'delay(${1:ms});', detail: 'Pause execution in milliseconds' },
+  { label: 'delayMicroseconds', insert: 'delayMicroseconds(${1:us});', detail: 'Pause execution in microseconds' },
+  { label: 'millis', insert: 'millis()', detail: 'Time since program start (ms)' },
+  { label: 'micros', insert: 'micros()', detail: 'Time since program start (µs)' },
+  { label: 'map', insert: 'map(${1:value}, ${2:fromLow}, ${3:fromHigh}, ${4:toLow}, ${5:toHigh})', detail: 'Re-map a number range' },
+  { label: 'constrain', insert: 'constrain(${1:x}, ${2:a}, ${3:b})', detail: 'Constrain value between limits' },
+  { label: 'tone', insert: 'tone(${1:pin}, ${2:frequency});', detail: 'Generate square wave' },
+  { label: 'noTone', insert: 'noTone(${1:pin});', detail: 'Stop square wave' },
+  { label: 'attachInterrupt', insert: 'attachInterrupt(digitalPinToInterrupt(${1:pin}), ${2:ISR}, ${3:mode});', detail: 'Attach hardware interrupt' },
+  { label: 'detachInterrupt', insert: 'detachInterrupt(digitalPinToInterrupt(${1:pin}));', detail: 'Detach hardware interrupt' },
+  { label: 'shiftOut', insert: 'shiftOut(${1:dataPin}, ${2:clockPin}, ${3:bitOrder}, ${4:value});', detail: 'Shift out a byte of data' },
+  { label: 'shiftIn', insert: 'shiftIn(${1:dataPin}, ${2:clockPin}, ${3:bitOrder})', detail: 'Shift in a byte of data' },
+  { label: 'pulseIn', insert: 'pulseIn(${1:pin}, ${2:value})', detail: 'Read pulse duration' },
+  { label: 'Serial.begin', insert: 'Serial.begin(${1:9600});', detail: 'Start serial communication' },
+  { label: 'Serial.println', insert: 'Serial.println(${1:data});', detail: 'Print line to serial monitor' },
+  { label: 'Serial.print', insert: 'Serial.print(${1:data});', detail: 'Print to serial monitor (no newline)' },
+  { label: 'Serial.available', insert: 'Serial.available()', detail: 'Check if data is available' },
+  { label: 'Serial.read', insert: 'Serial.read()', detail: 'Read incoming byte' },
+  { label: 'Serial.write', insert: 'Serial.write(${1:data});', detail: 'Write binary data' },
+  { label: 'Serial.readString', insert: 'Serial.readString()', detail: 'Read serial as String' },
+  { label: 'Wire.begin', insert: 'Wire.begin();', detail: 'Initialize I2C as master' },
+  { label: 'Wire.beginTransmission', insert: 'Wire.beginTransmission(${1:address});', detail: 'Begin I2C transmission' },
+  { label: 'Wire.endTransmission', insert: 'Wire.endTransmission();', detail: 'End I2C transmission' },
+  { label: 'SPI.begin', insert: 'SPI.begin();', detail: 'Initialize SPI bus' },
+  { label: 'SPI.transfer', insert: 'SPI.transfer(${1:data})', detail: 'Transfer SPI data' },
+]
+
+const ARDUINO_CONSTANTS = [
+  'HIGH', 'LOW', 'INPUT', 'OUTPUT', 'INPUT_PULLUP',
+  'LED_BUILTIN', 'A0', 'A1', 'A2', 'A3', 'A4', 'A5',
+  'RISING', 'FALLING', 'CHANGE',
+  'MSBFIRST', 'LSBFIRST',
+  'true', 'false',
+]
+
+function registerArduinoProviders(monaco: any) {
+  monaco.languages.registerCompletionItemProvider('cpp', {
+    provideCompletionItems(model: any, position: any) {
+      const word = model.getWordUntilPosition(position)
+      const range = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endColumn: word.endColumn,
+      }
+
+      const suggestions: any[] = []
+
+      // Arduino functions
+      for (const fn of ARDUINO_FUNCTIONS) {
+        suggestions.push({
+          label: fn.label,
+          kind: monaco.languages.CompletionItemKind.Function,
+          detail: fn.detail,
+          insertText: fn.insert,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          range,
+        })
+      }
+
+      // Arduino constants
+      for (const c of ARDUINO_CONSTANTS) {
+        suggestions.push({
+          label: c,
+          kind: monaco.languages.CompletionItemKind.Constant,
+          detail: 'Arduino constant',
+          insertText: c,
+          range,
+        })
+      }
+
+      // Common includes
+      for (const inc of ['Arduino.h', 'Wire.h', 'SPI.h', 'Servo.h', 'EEPROM.h', 'SoftwareSerial.h', 'LiquidCrystal.h']) {
+        suggestions.push({
+          label: `#include <${inc}>`,
+          kind: monaco.languages.CompletionItemKind.Module,
+          detail: `Include ${inc}`,
+          insertText: `#include <${inc}>`,
+          range,
+        })
+      }
+
+      // setup/loop scaffolding
+      suggestions.push({
+        label: 'setup',
+        kind: monaco.languages.CompletionItemKind.Snippet,
+        detail: 'Arduino setup function',
+        insertText: 'void setup() {\n  ${1}\n}',
+        insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+        range,
+      })
+      suggestions.push({
+        label: 'loop',
+        kind: monaco.languages.CompletionItemKind.Snippet,
+        detail: 'Arduino loop function',
+        insertText: 'void loop() {\n  ${1}\n}',
+        insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+        range,
+      })
+
+      return { suggestions }
+    }
+  })
+}
+
 export default function CodeEditor() {
   const {
     tabs, activeTabId, updateContent, theme,
@@ -300,8 +413,9 @@ export default function CodeEditor() {
       },
     })
 
-    // Register MicroPython IntelliSense providers
+    // Register IntelliSense providers
     registerMicroPythonProviders(monaco)
+    registerArduinoProviders(monaco)
     registerStratumProviders(monaco)
   }
 

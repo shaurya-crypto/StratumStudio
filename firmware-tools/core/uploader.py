@@ -297,15 +297,89 @@ def upload_circuitpython(port: str, file_path: str,
 # ─────────────────────────────────────────────
 #  Arduino uploader
 # ─────────────────────────────────────────────
-def upload_arduino(port: str, file_path: str, board_id: str) -> None:
+def check_and_ensure_arduino_cli() -> str:
+    """Ensure arduino-cli is present, installing it if missing."""
+    cli_path = shutil.which('arduino-cli')
+    if cli_path:
+        return cli_path
 
-    # Verify arduino-cli is on PATH
-    if not shutil.which('arduino-cli'):
-        die(
-            "arduino-cli not found on PATH.\n"
-            "  Fix: Install from https://arduino.github.io/arduino-cli/",
-            EXIT_TOOL_MISSING
+    # Check common fallback locations (including Stratum Studio's custom install dir)
+    home = os.path.expanduser('~')
+    fallback_paths = [
+        os.path.join(home, 'bin', 'arduino-cli.exe'),
+        os.path.join(home, 'AppData', 'Local', 'Programs', 'arduino-cli', 'arduino-cli.exe'),
+        os.path.join(home, 'AppData', 'Roaming', 'stratum-studio', 'bin', 'arduino-cli.exe'),
+        os.path.join(home, 'AppData', 'Roaming', 'Stratum Studio', 'bin', 'arduino-cli.exe'),
+        os.path.join(os.getcwd(), 'bin', 'arduino-cli.exe'),
+        os.path.join(os.getcwd(), 'arduino-cli.exe'),
+        'bin/arduino-cli.exe',
+    ]
+    for p in fallback_paths:
+        if os.path.exists(p):
+            return p
+
+    # If missing, automatically install it
+    info("arduino-cli not found. Downloading from GitHub Releases...")
+    if sys.platform == "win32":
+        # Use PowerShell to download ZIP from GitHub releases
+        ps_script = """
+$ErrorActionPreference = 'Stop'
+$binDir = Join-Path $env:LOCALAPPDATA 'Stratum\\bin'
+if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }
+$release = Invoke-RestMethod -Uri 'https://api.github.com/repos/arduino/arduino-cli/releases/latest'
+$tag = $release.tag_name
+$version = $tag -replace '^v', ''
+$url = "https://github.com/arduino/arduino-cli/releases/download/$tag/arduino-cli_${version}_Windows_64bit.zip"
+Write-Host "Downloading arduino-cli $tag..."
+$zipPath = Join-Path $env:TEMP 'arduino-cli.zip'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+$extractDir = Join-Path $env:TEMP 'arduino-cli-extract'
+if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+Copy-Item (Join-Path $extractDir 'arduino-cli.exe') $binDir -Force
+Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+$env:PATH = "$binDir;$env:PATH"
+Write-Host "Installed to $binDir"
+& (Join-Path $binDir 'arduino-cli.exe') core update-index
+& (Join-Path $binDir 'arduino-cli.exe') core install arduino:avr
+"""
+        proc = subprocess.run(
+            ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+            capture_output=True, text=True
         )
+        if proc.stdout:
+            info(proc.stdout.strip())
+    else:
+        proc = subprocess.run(
+            "curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh",
+            shell=True
+        )
+
+    if proc.returncode != 0:
+        die("Automatic installation of arduino-cli failed. Please install it manually.", EXIT_TOOL_MISSING)
+
+    info("Installation complete. Checking paths...")
+    # Re-check paths after install (including new install location)
+    cli_path = shutil.which('arduino-cli')
+    if cli_path:
+        return cli_path
+
+    local_stratum_path = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Stratum', 'bin', 'arduino-cli.exe')
+    if os.path.exists(local_stratum_path):
+        return local_stratum_path
+
+    for p in fallback_paths:
+        if os.path.exists(p):
+            return p
+
+    # Default to 'arduino-cli' if all else fails
+    return 'arduino-cli'
+
+
+def upload_arduino(port: str, file_path: str, board_id: str, mode: str = 'flash') -> None:
+    cli_exe = check_and_ensure_arduino_cli()
 
     base = os.path.basename(file_path)
     sketch_name = 'electro_sketch'
@@ -317,34 +391,125 @@ def upload_arduino(port: str, file_path: str, board_id: str) -> None:
         dest = os.path.join(sketch_dir, sketch_name + '.ino')
         shutil.copy(file_path, dest)
 
-        info(f"Compiling '{base}' for board '{board_id}' ...")
-        ok_flag, out = run([
-            'arduino-cli', 'compile', '--upload',
-            '-b', board_id,
-            '-p', port,
-            sketch_dir
-        ], timeout=180)
+        if mode == 'compile':
+            info(f"Compiling '{base}' for board '{board_id}' (Compile Only) ...")
+            cmd = [cli_exe, 'compile', '--fqbn', board_id, sketch_dir]
+            ok_flag, out = run(cmd, timeout=180)
+        elif mode == 'burn_bootloader':
+            info(f"Burning bootloader on '{port}' for board '{board_id}' ...")
+            cmd = [cli_exe, 'burn-bootloader', '--fqbn', board_id, '-p', port]
+            ok_flag, out = run(cmd, timeout=180)
+        else:
+            info(f"Compiling '{base}' for board '{board_id}' ...")
+            cmd_compile = [cli_exe, 'compile', '--fqbn', board_id, sketch_dir]
+            ok_flag, out = run(cmd_compile, timeout=180)
+            if ok_flag:
+                info(f"Uploading sketch to '{port}' ...")
+                cmd_upload = [cli_exe, 'upload', '--fqbn', board_id, '-p', port, sketch_dir]
+                ok_flag, out = run(cmd_upload, timeout=180)
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     if not ok_flag:
-        if "access is denied" in out.lower() or "permission denied" in out.lower():
+        out_lower = out.lower()
+
+        # ── Port-level errors ──
+        if "access is denied" in out_lower or "permission denied" in out_lower:
             die(
-                f"Port '{port}' is busy. Close Arduino IDE or any serial monitor.",
+                f"Port '{port}' is busy. Close Arduino IDE, serial monitors, or any app using the port.",
                 EXIT_PORT_BUSY
             )
-        if "no such file" in out.lower() or "could not open port" in out.lower():
-            die(f"Device not found on port '{port}'. Reconnect and try again.", EXIT_PORT_MISSING)
-        if "board" in out.lower() and "not found" in out.lower():
+        if any(p in out_lower for p in ("no such file", "could not open port", "no port", "port does not exist")):
+            die(
+                f"Device not found on port '{port}'.\n"
+                f"  Fix: Check the USB cable, reconnect the device, and verify the port is correct.",
+                EXIT_PORT_MISSING
+            )
+
+        # ── Board / Core errors ──
+        if "board" in out_lower and "not found" in out_lower:
+            # Extract platform from FQBN  e.g. arduino:avr:uno → arduino:avr
+            platform = ":".join(board_id.split(":")[:2]) if ":" in board_id else board_id
             die(
                 f"Board '{board_id}' is not installed in arduino-cli.\n"
-                f"  Fix: arduino-cli core install <platform>",
+                f"  Fix: Run this command in your terminal:\n"
+                f"       arduino-cli core install {platform}",
                 EXIT_UPLOAD_FAILED
             )
-        die(f"Compile/upload failed:\n{_last_line(out)}", EXIT_UPLOAD_FAILED)
+        if "platform" in out_lower and ("not installed" in out_lower or "not found" in out_lower):
+            platform = ":".join(board_id.split(":")[:2]) if ":" in board_id else board_id
+            die(
+                f"Arduino platform for board '{board_id}' is not installed.\n"
+                f"  Fix: arduino-cli core install {platform}",
+                EXIT_TOOL_MISSING
+            )
 
-    ok(f"Compiled and flashed '{base}' to {port}")
+        # ── Chip mismatch / wrong board ──
+        if "stk500" in out_lower and ("not in sync" in out_lower or "resp=0x00" in out_lower):
+            die(
+                f"⚠️ Incorrect board or chip connected on '{port}'.\n"
+                f"  Selected board FQBN: {board_id}\n"
+                f"  The device on this port does not respond to the expected programming protocol.\n"
+                f"  Fix: Verify the correct board is selected in the interpreter, or check the USB cable.",
+                EXIT_UPLOAD_FAILED
+            )
+        if "avrdude" in out_lower and "not responding" in out_lower:
+            die(
+                f"⚠️ AVR programmer not responding on '{port}'.\n"
+                f"  Selected board FQBN: {board_id}\n"
+                f"  Fix: The connected chip may not match the selected board profile.\n"
+                f"       Try a different board or check the physical connection.",
+                EXIT_UPLOAD_FAILED
+            )
+        if "wrong microcontroller" in out_lower or "signature" in out_lower:
+            die(
+                f"⚠️ Chip signature mismatch detected on '{port}'.\n"
+                f"  Selected board FQBN: {board_id}\n"
+                f"  The physical chip does not match the expected signature for this board.\n"
+                f"  Fix: Select the correct board from the interpreter, or check your hardware.",
+                EXIT_UPLOAD_FAILED
+            )
+
+        # ── Compilation errors ──
+        if "error:" in out_lower and "compil" in out_lower:
+            die(
+                f"Compilation failed for board '{board_id}':\n{_last_line(out)}\n"
+                f"  Fix: Check your code for syntax errors.",
+                EXIT_UPLOAD_FAILED
+            )
+        if "sketch too big" in out_lower or "exceeds" in out_lower:
+            die(
+                f"Sketch is too large for board '{board_id}'.\n"
+                f"  Fix: Reduce code size or use a board with more flash memory.",
+                EXIT_UPLOAD_FAILED
+            )
+
+        # ── Timeout ──
+        if "timed out" in out_lower or "timeout" in out_lower:
+            die(
+                f"Connection to '{port}' timed out.\n"
+                f"  Fix: The device may be busy. Try pressing the RESET button on the board.",
+                EXIT_TIMEOUT
+            )
+
+        # ── ESP-specific errors ──
+        if "a]" in out_lower and "connect" in out_lower:
+            die(
+                f"ESP board failed to connect on '{port}'.\n"
+                f"  Fix: Hold the BOOT button while uploading, then release after 'Connecting...' appears.",
+                EXIT_UPLOAD_FAILED
+            )
+
+        # ── Generic fallback ──
+        die(f"Operation failed:\n{_last_line(out)}", EXIT_UPLOAD_FAILED)
+
+    if mode == 'compile':
+        ok(f"Compiled '{base}' successfully")
+    elif mode == 'burn_bootloader':
+        ok(f"Burned bootloader to {port} successfully")
+    else:
+        ok(f"Compiled and flashed '{base}' to {port}")
 
 
 # ─────────────────────────────────────────────
@@ -352,7 +517,7 @@ def upload_arduino(port: str, file_path: str, board_id: str) -> None:
 # ─────────────────────────────────────────────
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Electro CODE — firmware uploader',
+        description='Stratum Studio — firmware uploader',
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument('--port',        required=True,  help='Serial port (e.g. COM3 or /dev/ttyUSB0)')
@@ -364,8 +529,8 @@ if __name__ == '__main__':
                         help='Arduino board FQBN (e.g. arduino:avr:uno)')
     parser.add_argument('--device-name', default=None,
                         help='Destination filename on device (default: main.py / code.py)')
-    parser.add_argument('--mode',        default='flash', choices=['flash', 'run'],
-                        help='flash = save to device,  run = execute without saving')
+    parser.add_argument('--mode',        default='flash', choices=['flash', 'run', 'compile', 'burn_bootloader'],
+                        help='flash = save/upload to device,  run = execute without saving, compile = compile only, burn_bootloader = burn bootloader')
     args = parser.parse_args()
 
     # ── Validate before touching the device ──
@@ -380,5 +545,5 @@ if __name__ == '__main__':
 
     elif args.language in ('arduino', 'c'):
         if args.mode == 'run':
-            die("Run mode is not supported for Arduino/C. Use 'flash' instead.", EXIT_UPLOAD_FAILED)
-        upload_arduino(args.port, args.file, args.board_id)
+            die("Run mode is not supported for Arduino/C. Use 'flash' or 'compile' instead.", EXIT_UPLOAD_FAILED)
+        upload_arduino(args.port, args.file, args.board_id, args.mode)

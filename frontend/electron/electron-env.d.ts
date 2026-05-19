@@ -31,7 +31,9 @@ interface Window {
     checkChip:    (args: { port: string }) => Promise<{ connected: boolean; message?: string }>
     startMonitor: (args: { port: string; baudRate?: number }) => Promise<{ success: boolean; message?: string }>
     stopMonitor:  () => Promise<{ success: boolean }>
-    flash:        (args: { code: string; port: string; language: string; boardId?: string; deviceName?: string }) => Promise<{ success: boolean; message: string }>
+    flash:        (args: { code: string; port: string; language: string; boardId?: string; deviceName?: string; mode?: string }) => Promise<{ success: boolean; message: string }>
+    checkArduinoCli: () => Promise<boolean>
+    installArduinoCli: () => Promise<{ success: boolean; message?: string }>
 
     // File System
     listFiles:    (args: { port: string }) => Promise<unknown>

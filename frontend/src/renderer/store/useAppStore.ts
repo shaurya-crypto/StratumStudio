@@ -247,13 +247,80 @@ export const ALL_INTERPRETERS: Interpreter[] = [
   },
 ];
 
+// ── Language Profiles (toolbar, baud, template, toolchain per language) ──
+
+export const LANG_PROFILE: Record<string, {
+  toolchain: string;
+  toolbar: string[];
+  baudRate: number;
+  fileExt: string;
+  monacoLang: string;
+  template: string;
+}> = {
+  micropython: {
+    toolchain: 'mpremote',
+    toolbar: ['run', 'stop', 'upload'],
+    baudRate: 115200,
+    fileExt: '.py',
+    monacoLang: 'python',
+    template: `from machine import Pin\nimport time\n\nled = Pin("LED", Pin.OUT)\n\nwhile True:\n    led.toggle()\n    time.sleep(0.5)`,
+  },
+  circuitpython: {
+    toolchain: 'mpremote',
+    toolbar: ['run', 'stop', 'upload'],
+    baudRate: 115200,
+    fileExt: '.py',
+    monacoLang: 'python',
+    template: `import board, digitalio, time\n\nled = digitalio.DigitalInOut(board.LED)\nled.direction = digitalio.Direction.OUTPUT\n\nwhile True:\n    led.value = not led.value\n    time.sleep(0.5)`,
+  },
+  arduino: {
+    toolchain: 'arduino-cli',
+    toolbar: ['compile', 'upload', 'burn_bootloader'],
+    baudRate: 9600,
+    fileExt: '.ino',
+    monacoLang: 'cpp',
+    template: `void setup() {\n  pinMode(LED_BUILTIN, OUTPUT);\n}\n\nvoid loop() {\n  digitalWrite(LED_BUILTIN, HIGH);\n  delay(1000);\n  digitalWrite(LED_BUILTIN, LOW);\n  delay(1000);\n}`,
+  },
+};
+
+// ── FQBN Map (arduino-cli board identifiers) ──
+
+export const FQBN_MAP: Record<string, string> = {
+  'uno-ino':      'arduino:avr:uno',
+  'nano-ino':     'arduino:avr:nano',
+  'mega-ino':     'arduino:avr:mega',
+  'micro-ino':    'arduino:avr:micro',
+  'promini-ino':  'arduino:avr:pro',
+  'stm32-ino':    'STMicroelectronics:stm32:GenF1',
+  'rp2040-ino':   'rp2040:rp2040:rpipico',
+  'esp32-ino':    'esp32:esp32:esp32',
+  'esp8266-ino':  'esp8266:esp8266:nodemcuv2',
+};
+
+// ── Helper: check if active file matches interpreter language ──
+
+export function isFileMatchingInterpreter(fileName: string | undefined, language: string | undefined): boolean {
+  if (!fileName || !language) return true; // no file or no interpreter = don't block
+  const ext = fileName.slice(fileName.lastIndexOf('.')).toLowerCase();
+  if (language === 'arduino') return ext === '.ino' || ext === '.cpp' || ext === '.c' || ext === '.h';
+  if (language === 'micropython' || language === 'circuitpython') return ext === '.py';
+  return true;
+}
+
+export function getFileGuardMessage(language: string | undefined): string {
+  if (language === 'arduino') return 'Open a .ino file for Arduino (C++) boards.';
+  if (language === 'micropython') return 'Open a .py file for MicroPython boards.';
+  if (language === 'circuitpython') return 'Open a .py file for CircuitPython boards.';
+  return 'Select an interpreter first.';
+}
+
 // ── Default state ─────────────────────────────────────────────
 
 const defaultTerminal: TerminalInstance = {
   id: "term-1",
   name: "Serial 1",
   type: "serial",
-  lines: ["Electro CODE - Serial Monitor", "Connect to a device to begin.", ""],
+  lines: ["Stratum Studio - Serial Monitor", "Connect to a device to begin.", ""],
 };
 
 // defaultTab removed because it is unused
@@ -418,6 +485,20 @@ interface AppStore {
   libraries: string[];
   refreshLibraries: () => Promise<void>;
   installLibrary: (nameOrUrl: string) => Promise<void>;
+
+  // Board configuration & selection
+  activeBaudRate: number;
+  arduinoCliInstalled: boolean;
+  mpremoteInstalled: boolean;
+  setBaudRate: (baud: number) => void;
+  checkArduinoCli: () => Promise<void>;
+  installArduinoCli: () => Promise<void>;
+  checkMpremote: () => Promise<void>;
+  installMpremote: () => Promise<void>;
+  lastDetectedChip: string | null;
+  setLastDetectedChip: (val: string | null) => void;
+  checkBoardMismatch: () => string | null;
+  createNewProjectTemplate: () => void;
 }
 
 let untitledCount = 1;
@@ -498,13 +579,59 @@ export const useAppStore = create<AppStore>()(
       openFirmwareModal: (family) => set({ firmwareModalOpen: true, firmwareModalFamily: family }),
       closeFirmwareModal: () => set({ firmwareModalOpen: false, firmwareModalFamily: null }),
 
-      // Device
       interpreter: null,
-      setInterpreter: (i) => set({ interpreter: i }),
+      setInterpreter: (i) => {
+        set({ interpreter: i });
+        if (i) {
+          const targetBaud = i.language === 'arduino' ? 9600 : 115200;
+          set({ activeBaudRate: targetBaud });
+          
+          if (i.language === 'arduino') {
+            get().checkArduinoCli();
+          } else {
+            get().checkMpremote();
+          }
+          
+          const { isConnected, selectedPort } = get();
+          if (isConnected && selectedPort) {
+            // Clean disconnect on target interpreter change to prevent mismatched actions
+            set({ isConnected: false, deviceFileTree: [] });
+            (window as any).electronAPI.stopMonitor().catch(console.error);
+            sendMcpEvent("device_update", {
+              chip: i.chip,
+              serial_port: selectedPort,
+              baud_rate: targetBaud,
+              connected: false
+            });
+            get().showNotification(`Target board changed to ${i.label}. Port disconnected to prevent mismatch.`, "info");
+          }
+          
+          // Show alert warning about active tab language mismatch if applicable
+          const state = get();
+          const activeTab = state.tabs.find((t) => t.id === state.activeTabId);
+          if (activeTab) {
+            if (i.language === 'arduino') {
+              if (!activeTab.name.endsWith('.ino') && !activeTab.name.endsWith('.cpp')) {
+                state.showNotification("Switched interpreter to Arduino. Open a .ino or .cpp file to compile.", "warning");
+              } else {
+                state.updateTabMeta(activeTab.id, { language: 'cpp' });
+              }
+            } else {
+              if (!activeTab.name.endsWith('.py')) {
+                state.showNotification(`Switched to ${i.langDisplay}. Open a .py file to run.`, "warning");
+              } else {
+                state.updateTabMeta(activeTab.id, { language: 'python' });
+              }
+            }
+          }
+        }
+      },
       availablePorts: [],
       setAvailablePorts: (ports) => set({ availablePorts: ports }),
       selectedPort: "COM11",
       setSelectedPort: (p) => set({ selectedPort: p }),
+      lastDetectedChip: null,
+      setLastDetectedChip: (val) => set({ lastDetectedChip: val }),
       isConnected: false,
       setConnected: (v) => {
         set({ isConnected: v });
@@ -518,7 +645,7 @@ export const useAppStore = create<AppStore>()(
             sendMcpEvent("device_update", {
               chip: interpreter.chip,
               serial_port: port,
-              baud_rate: 115200,
+              baud_rate: get().activeBaudRate,
               connected: true
             });
           }
@@ -621,7 +748,7 @@ export const useAppStore = create<AppStore>()(
               console.error(e)
             } finally {
               get().unlockDevice();
-              await win.electronAPI?.startMonitor?.({ port, baudRate: 115200 });
+              await win.electronAPI?.startMonitor?.({ port, baudRate: get().activeBaudRate });
             }
           } else {
             // Save to local PC
@@ -715,7 +842,7 @@ export const useAppStore = create<AppStore>()(
         } finally {
           get().unlockDevice();
           // Restart monitor
-          await (window as any).electronAPI.startMonitor({ port, baudRate: 115200 });
+          await (window as any).electronAPI.startMonitor({ port, baudRate: get().activeBaudRate });
         }
       },
       selectedFileId: null,
@@ -1026,8 +1153,24 @@ export const useAppStore = create<AppStore>()(
           return;
         }
 
+        // ── Language guard: Arduino cannot use 'run' mode ──
+        if (interpreter.language === 'arduino') {
+          showNotification(
+            'Run mode is not available for Arduino/C++. Use Compile or Upload from the toolbar.',
+            'warning'
+          );
+          addTerminalLine(activeTerminalId, '⚠️ Arduino boards do not support Run mode. Use the Compile/Upload buttons.');
+          return;
+        }
+
         const activeTab = tabs.find((t) => t.id === activeTabId);
         if (!activeTab) return;
+
+        // ── File guard: check file extension matches interpreter ──
+        if (!isFileMatchingInterpreter(activeTab.name, interpreter.language)) {
+          showNotification(getFileGuardMessage(interpreter.language), 'warning');
+          return;
+        }
 
         // Auto-stop if already running
         if (state.isFlashing) {
@@ -1171,7 +1314,7 @@ export const useAppStore = create<AppStore>()(
             state.showNotification(`Failed: ${response.message}`, 'error');
           }
         } finally {
-          await (window as any).electronAPI.startMonitor({ port: state.selectedPort, baudRate: 115200 });
+          await (window as any).electronAPI.startMonitor({ port: state.selectedPort, baudRate: state.activeBaudRate });
         }
       },
 
@@ -1197,28 +1340,149 @@ export const useAppStore = create<AppStore>()(
         }
         },
         installLibrary: async (nameOrUrl: string) => {
-        const p = get().openedFolderPath;
-        if (!p) {
-          get().showNotification("Open a folder first", "warning");
-          return;
-        }
-        get().showNotification(`Installing ${nameOrUrl}...`, "info");
-        try {
-          const result = await (window as any).electronAPI.installLibrary({
-            nameOrUrl,
-            workspacePath: p
-          });
-          if (result.success) {
-            get().showNotification(`Installed ${result.fileName}`, "success");
-            await get().refreshLibraries();
-            await get().refreshLocalFolder();
-          } else {
-            get().showNotification(`Failed: ${result.message}`, "error");
+          const p = get().openedFolderPath;
+          if (!p) {
+            get().showNotification("Open a folder first", "warning");
+            return;
           }
-        } catch (e: any) {
-          get().showNotification(`Error: ${e.message}`, "error");
-        }
-        }
+          const interpreter = get().interpreter;
+          const selectedPort = get().selectedPort;
+          get().showNotification(`Installing ${nameOrUrl}...`, "info");
+          try {
+            const result = await (window as any).electronAPI.installLibrary({
+              nameOrUrl,
+              workspacePath: p,
+              language: interpreter ? interpreter.language : 'micropython',
+              port: selectedPort || ''
+            });
+            if (result.success) {
+              get().showNotification(`Installed ${result.fileName}`, "success");
+              await get().refreshLibraries();
+              await get().refreshLocalFolder();
+            } else {
+              get().showNotification(`Failed: ${result.message}`, "error");
+            }
+          } catch (e: any) {
+            get().showNotification(`Error: ${e.message}`, "error");
+          }
+        },
+
+        // Board configuration & selection
+        activeBaudRate: 115200,
+        arduinoCliInstalled: false,
+        mpremoteInstalled: false,
+
+        setBaudRate: (baud) => {
+          set({ activeBaudRate: baud });
+          
+          const state = get();
+          const { isConnected, selectedPort } = state;
+          if (isConnected && selectedPort) {
+            // Restart standard monitor at the new baud rate
+            (window as any).electronAPI.stopMonitor().then(() => {
+              (window as any).electronAPI.startMonitor({ port: selectedPort, baudRate: baud });
+            }).catch(console.error);
+          }
+
+          state.showNotification(`Baud rate set to ${baud}`, "success");
+        },
+
+        checkArduinoCli: async () => {
+          try {
+            const installed = await (window as any).electronAPI.checkArduinoCli();
+            set({ arduinoCliInstalled: installed });
+          } catch (e) {
+            console.error("checkArduinoCli error", e);
+          }
+        },
+
+        installArduinoCli: async () => {
+          get().showNotification("Installing arduino-cli in the background...", "info");
+          try {
+            const res = await (window as any).electronAPI.installArduinoCli();
+            if (res && res.success) {
+              set({ arduinoCliInstalled: true });
+              get().showNotification("arduino-cli installed successfully!", "success");
+            } else {
+              get().showNotification(`Failed to install arduino-cli: ${res?.message || 'Unknown error'}`, "error");
+            }
+          } catch (e: any) {
+            get().showNotification(`Failed to install arduino-cli: ${e.message}`, "error");
+          }
+        },
+
+        checkMpremote: async () => {
+          try {
+            const installed = await (window as any).electronAPI.checkMpremote();
+            set({ mpremoteInstalled: installed });
+          } catch (e) {
+            console.error("checkMpremote error", e);
+          }
+        },
+
+        installMpremote: async () => {
+          get().showNotification("Installing mpremote toolchain in the background...", "info");
+          try {
+            const res = await (window as any).electronAPI.installMpremote();
+            if (res && res.success) {
+              set({ mpremoteInstalled: true });
+              get().showNotification("mpremote installed successfully!", "success");
+            } else {
+              get().showNotification(`Failed to install mpremote: ${res?.message || 'Unknown error'}`, "error");
+            }
+          } catch (e: any) {
+            get().showNotification(`Failed to install mpremote: ${e.message}`, "error");
+          }
+        },
+
+        checkBoardMismatch: () => {
+          const detected = get().lastDetectedChip;
+          const lang = get().interpreter?.language;
+          const label = get().interpreter?.label;
+
+          if (!detected) return null; // unknown, allow through
+
+          if (lang === 'arduino' && detected === 'micropython') {
+            return `⚠️ Board mismatch: MicroPython board detected but "${label}" selected.\nChange interpreter to a MicroPython board.`;
+          }
+          if (lang === 'arduino' && detected === 'circuitpython') {
+            return `⚠️ Board mismatch: CircuitPython board detected but "${label}" selected.\nChange interpreter to a CircuitPython board.`;
+          }
+          // Also handle ESP32 which usually runs micropython/circuitpython or arduino
+          if ((lang === 'micropython' || lang === 'circuitpython') && (detected === 'arduino' || detected === 'no_repl')) {
+            return `⚠️ Board mismatch: Arduino/AVR board detected but "${label}" selected.\nChange interpreter to Arduino C++.`;
+          }
+          
+          return null;
+        },
+
+        createNewProjectTemplate: () => {
+          const interp = get().interpreter;
+          if (!interp) {
+            get().showNotification('Select an interpreter first.', 'warning');
+            return;
+          }
+          const profile = LANG_PROFILE[interp.language];
+          if (!profile) {
+            get().showNotification(`No template available for language: ${interp.language}`, 'warning');
+            return;
+          }
+          untitledCount++;
+          const name = interp.language === 'arduino'
+            ? `blink_${untitledCount}${profile.fileExt}`
+            : `main_${untitledCount}${profile.fileExt}`;
+          const tab: FileTab = {
+            id: `untitled-${untitledCount}`,
+            name,
+            filePath: null,
+            content: profile.template,
+            savedContent: "",
+            language: profile.monacoLang,
+            source: "local",
+          };
+          set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }));
+          get().showNotification(`Created ${name} template for ${interp.label}`, 'success');
+        },
 
         }),
 
@@ -1238,6 +1502,7 @@ export const useAppStore = create<AppStore>()(
         interpreter: s.interpreter,
         conversations: s.conversations,
         currentConversationId: s.currentConversationId,
+        activeBaudRate: s.activeBaudRate,
       }),
       onRehydrateStorage: () => {
         // Return a callback that runs after rehydration is complete

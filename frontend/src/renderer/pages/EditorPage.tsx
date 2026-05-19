@@ -1,6 +1,6 @@
 import { useCallback, useRef, useEffect, useState } from 'react'
 import { Files, Cpu, Settings, Bot, ChevronDown, ChevronUp, GitBranch, AlertTriangle, Circle } from 'lucide-react'
-import { useAppStore } from '../store/useAppStore'
+import { useAppStore, isFileMatchingInterpreter, getFileGuardMessage } from '../store/useAppStore'
 import { subscribeToMcp } from '../store/mcpClient'
 import MenuBar from '../components/MenuBar/MenuBar'
 import FileExplorer from '../components/Sidebar/FileExplorer'
@@ -19,16 +19,22 @@ export default function EditorPage() {
     sidebarView, setSidebarView, sidebarWidth, setSidebarWidth,
     aiPanelOpen, aiPanelWidth, setAiPanelWidth,
     terminalOpen, setTerminalOpen, terminalHeight, setTerminalHeight,
-    interpreter, isConnected, selectedPort,
+    isConnected, selectedPort,
     tabs, activeTabId,
     settingsOpen, setSettingsOpen,
-    interpreterModalOpen, setInterpreterModalOpen,
+    interpreterModalOpen,
     theme,
     notification, clearNotification,
     newUntitledTab, saveTab,
     promptConfig, resolvePrompt,
     isDeviceBusy, busyReason,
-    firmwareModalOpen
+    firmwareModalOpen,
+    interpreter,
+    activeBaudRate,
+    arduinoCliInstalled,
+    installArduinoCli,
+    mpremoteInstalled,
+    installMpremote
   } = useAppStore()
 
   // Internal Prompt State
@@ -70,7 +76,38 @@ export default function EditorPage() {
       }
       if (e.key === 'F5') {
         e.preventDefault()
-        useAppStore.getState().runExecution()
+        const s = useAppStore.getState()
+        const currentTab = s.tabs.find(t => t.id === s.activeTabId)
+        if (!currentTab) { s.showNotification('No file open.', 'warning'); return }
+        if (!isFileMatchingInterpreter(currentTab.name, s.interpreter?.language)) {
+          s.showNotification(getFileGuardMessage(s.interpreter?.language), 'warning')
+          return
+        }
+        if (s.interpreter?.language === 'arduino') {
+          // F5 = Compile for Arduino — handled by BoardToolbar click
+          // Just trigger the compile button event
+          const compileBtn = document.querySelector('[title="Compile Sketch (F5)"]') as HTMLButtonElement
+          if (compileBtn) compileBtn.click()
+        } else {
+          s.runExecution()
+        }
+      }
+      if (e.key === 'F7') {
+        e.preventDefault()
+        const s = useAppStore.getState()
+        const currentTab = s.tabs.find(t => t.id === s.activeTabId)
+        if (!currentTab) { s.showNotification('No file open.', 'warning'); return }
+        if (!isFileMatchingInterpreter(currentTab.name, s.interpreter?.language)) {
+          s.showNotification(getFileGuardMessage(s.interpreter?.language), 'warning')
+          return
+        }
+        if (s.interpreter?.language === 'arduino') {
+          const uploadBtn = document.querySelector('[title="Upload Sketch (F7)"]') as HTMLButtonElement
+          if (uploadBtn) uploadBtn.click()
+        } else {
+          const uploadBtn = document.querySelector('[title="Upload / Save (F7)"]') as HTMLButtonElement
+          if (uploadBtn) uploadBtn.click()
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -239,34 +276,72 @@ export default function EditorPage() {
       {/* ── Status bar ── */}
       <div className="statusbar">
         {/* Left */}
-        <div className="statusbar-item" onClick={() => setSidebarView(sidebarView === 'device' ? null : 'device')} title="Device">
+        <div className="statusbar-item" style={{ color: 'var(--primary)', fontWeight: 600 }}>
           <Cpu size={12} />
-          <span>{interpreter ? interpreter.label : 'No Interpreter'}</span>
+          <span>Board: {interpreter?.label ?? 'None'}</span>
         </div>
 
-        <div className="statusbar-item" title="Connection">
-          <Circle size={7} fill={isConnected ? 'var(--green)' : 'var(--text-dim)'} stroke="none" />
-          <span>{isConnected ? selectedPort ?? 'Connected' : 'Not Connected'}</span>
+        <div className="statusbar-item">
+          <span>Chip: {interpreter?.chip ?? '—'}</span>
         </div>
+
+        <div className="statusbar-item">
+          <span>Lang: {interpreter?.langDisplay ?? '—'}</span>
+        </div>
+
+        <div className="statusbar-item">
+          <Circle size={7} fill={isConnected ? 'var(--green)' : 'var(--text-dim)'} stroke="none" />
+          <span>Port: {isConnected ? selectedPort ?? 'Connected' : 'Not Connected'}</span>
+        </div>
+
+        <div className="statusbar-item">
+          <span>Baud: {interpreter?.language !== 'arduino' ? 115200 : activeBaudRate}</span>
+        </div>
+
+        {interpreter?.language !== 'arduino' ? (
+          <div 
+            className="statusbar-item" 
+            style={{ 
+              cursor: mpremoteInstalled ? 'default' : 'pointer',
+              background: mpremoteInstalled ? 'transparent' : 'rgba(239, 68, 68, 0.1)',
+              color: mpremoteInstalled ? 'var(--text-primary)' : 'var(--red)'
+            }}
+            onClick={() => {
+              if (!mpremoteInstalled) {
+                installMpremote();
+              }
+            }}
+            title={mpremoteInstalled ? "mpremote Toolchain Installed" : "Click to Install mpremote Toolchain"}
+          >
+            <span>
+              Toolchain: {mpremoteInstalled ? '✅ mpremote' : '⚠️ mpremote missing — Click to install'}
+            </span>
+          </div>
+        ) : (
+          <div 
+            className="statusbar-item" 
+            style={{ 
+              cursor: arduinoCliInstalled ? 'default' : 'pointer',
+              background: arduinoCliInstalled ? 'transparent' : 'rgba(239, 68, 68, 0.1)',
+              color: arduinoCliInstalled ? 'var(--text-primary)' : 'var(--red)'
+            }}
+            onClick={() => {
+              if (!arduinoCliInstalled) {
+                installArduinoCli();
+              }
+            }}
+            title={arduinoCliInstalled ? "Arduino Toolchain Installed" : "Click to Install Arduino Toolchain"}
+          >
+            <span>
+              Toolchain: {arduinoCliInstalled ? '✅ arduino-cli' : '⚠️ arduino-cli missing — Click to install'}
+            </span>
+          </div>
+        )}
 
         {isDeviceBusy && (
           <div className="statusbar-item" style={{ background: 'var(--yellow-dim)', color: 'var(--yellow)' }} title="Device Busy">
             <AlertTriangle size={11} />
             <span>BUSY: {busyReason}</span>
-          </div>
-        )}
-
-        {interpreter && (
-          <div className="statusbar-item" title="Language">
-            <span>{interpreter.langDisplay}</span>
-          </div>
-        )}
-
-        {!interpreter && (
-          <div className="statusbar-item" style={{ color: 'rgba(255,255,255,0.7)', cursor: 'pointer' }}
-            onClick={() => setInterpreterModalOpen(true)} title="Select Interpreter">
-            <AlertTriangle size={11} />
-            <span>Select Interpreter</span>
           </div>
         )}
 

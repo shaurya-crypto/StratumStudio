@@ -1,16 +1,14 @@
-import { useRef } from 'react'
-import { X, Circle, Play, Square, Save, HardDrive, Cpu } from 'lucide-react'
+import { X, Circle, Save, HardDrive, Cpu } from 'lucide-react'
 import { useAppStore } from '../../store/useAppStore'
 import { FileIcon } from '../../utils/Fileicon'
+import BoardToolbar from './BoardToolbar'
 
 export default function EditorTabs() {
   const { 
     tabs, activeTabId, setActiveTab, closeTab, saveTab, showNotification,
-    interpreter, runExecution, stopExecution,
-    savePromptOpen, setSavePromptOpen, handleSaveClick, saveToLocal, saveToDevice
+    interpreter,
+    savePromptOpen, setSavePromptOpen, saveToLocal, saveToDevice
   } = useAppStore()
-
-  const saveBtnRef = useRef<HTMLButtonElement>(null)
 
   // no need for click outside listener for a full modal with cancel button
 
@@ -22,14 +20,6 @@ export default function EditorTabs() {
   )
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
-
-  const handleRun = async () => {
-    await runExecution()
-  }
-
-  const handleStop = async () => {
-    await stopExecution()
-  }
 
 
 
@@ -88,35 +78,7 @@ export default function EditorTabs() {
       </div>
 
       {/* Editor Actions Toolbar */}
-      <div style={{ display: 'flex', gap: 4, padding: '0 8px', alignItems: 'center' }}>
-        <button 
-          className="btn-icon" 
-          onClick={handleRun} 
-          title="Run Current File"
-          style={{ padding: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-primary)', background: 'transparent', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer', transition: 'all 0.15s ease' }}
-        >
-          <Play size={16} />
-        </button>
-        <button 
-          className="btn-icon" 
-          onClick={handleStop} 
-          title="Stop Execution"
-          style={{ padding: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--red)', background: 'transparent', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer', transition: 'all 0.15s ease' }}
-        >
-          <Square size={16} />
-        </button>
-        <div style={{ position: 'relative' }}>
-          <button 
-            ref={saveBtnRef}
-            className="btn-icon" 
-            onClick={handleSaveClick} 
-            title="Save / Deploy"
-            style={{ padding: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', background: 'transparent', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer', transition: 'all 0.15s ease' }}
-          >
-            <Save size={16} />
-          </button>
-        </div>
-      </div>
+      <BoardToolbar />
 
       {/* The Centered Save Modal Overlay */}
       {savePromptOpen && (

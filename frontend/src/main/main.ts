@@ -154,8 +154,9 @@ async function stopMonitorNative(): Promise<boolean> {
     if (port.isOpen) {
       port.close((err) => {
         if (err) console.error("[Serial] Error closing port:", err);
-        // Give Windows a moment to fully release the COM port handle
-        setTimeout(() => resolve(true), 200);
+        // Give Windows enough time to fully release the COM port handle
+        // 800ms is required on many Windows machines for COM handle cleanup
+        setTimeout(() => resolve(true), 800);
       });
     } else {
       resolve(true);
@@ -438,8 +439,6 @@ function setupIpcHandlers() {
   // Check chip is actually connected — just verify the port can be opened (works for ALL chip types)
   ipcMain.handle("hardware:checkChip", async (_, { port }) => {
     // Use stopMonitorNative() to kill the ENTIRE process tree on Windows.
-    // A direct .kill() only kills the parent python.exe, leaving child
-    // processes (mpremote, etc.) alive and holding the COM port locked.
     await stopMonitorNative();
 
     return new Promise((resolve) => {
@@ -451,56 +450,75 @@ function setupIpcHandlers() {
         }
       };
 
-      const ser = spawn(getPythonExe(), [
-        "-c",
-        `
-import serial, sys, time
-try:
-    s = serial.Serial('${port}', 115200, timeout=2)
-    time.sleep(0.3)
-    s.close()
-    print('ok')
-    sys.stdout.flush()
-except Exception as e:
-    print('fail:' + str(e), file=sys.stderr)
-    sys.stderr.flush()
-    sys.exit(1)
-`,
-      ]);
+      // Enhanced check: Open port, send Ctrl-C + newline, read REPL response
+      // to fingerprint what's actually on the other end.
+      const checkScript = [
+        "import serial, sys, time, json",
+        "try:",
+        `    s = serial.Serial('${port}', 115200, timeout=2)`,
+        "    time.sleep(0.3)",
+        "    s.write(bytes([13, 10, 3, 3, 13, 10]))",
+        "    time.sleep(0.5)",
+        "    resp = s.read(s.in_waiting or 1024).decode('utf-8', errors='replace')",
+        "    s.close()",
+        "    detected = 'unknown'",
+        "    if 'MicroPython' in resp or '>>>' in resp:",
+        "        detected = 'micropython'",
+        "    elif 'CircuitPython' in resp:",
+        "        detected = 'circuitpython'",
+        "    elif 'Traceback' in resp:",
+        "        detected = 'micropython'",
+        "    result = {'connected': True, 'detected': detected, 'raw': resp[:200]}",
+        "    print(json.dumps(result))",
+        "    sys.stdout.flush()",
+        "except Exception as e:",
+        "    print(json.dumps({'connected': False, 'message': str(e)}))",
+        "    sys.stdout.flush()",
+        "    sys.exit(1)",
+      ].join("\n");
+
+      const ser = spawn(getPythonExe(), ["-c", checkScript]);
 
       let out = "";
       let errBuf = "";
-      ser.stdout.on("data", (d) => (out += d.toString()));
-      ser.stderr.on("data", (d) => (errBuf += d.toString()));
+      ser.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      ser.stderr.on("data", (d: Buffer) => (errBuf += d.toString()));
 
-      // If python is not found on PATH, spawn emits 'error' not 'close'
-      ser.on("error", (e) => {
-        console.error("[ElectroAI] spawn error:", e.message);
+      ser.on("error", (e: Error) => {
+        console.error("[StratumStudio] spawn error:", e.message);
         done({
           connected: false,
           message: `Python not found. Install Python and pyserial.`,
         });
       });
 
-      ser.on("close", (code) => {
+      ser.on("close", (code: number | null) => {
         console.log(
-          `[ElectroAI] checkChip python exited code=${code}, stdout="${out.trim()}", stderr="${errBuf.trim()}"`,
+          `[StratumStudio] checkChip python exited code=${code}, stdout="${out.trim()}", stderr="${errBuf.trim()}"`,
         );
-        if (out.trim() === "ok") {
-          done({ connected: true });
-        } else {
-          const msg =
-            errBuf.trim() ||
-            `Could not open ${port}. Check USB cable, drivers, and close other serial tools.`;
-          done({ connected: false, message: msg });
+        try {
+          const parsed = JSON.parse(out.trim());
+          done(parsed);
+        } catch {
+          // Fallback: if stdout is 'ok' (old format) still handle it
+          if (out.trim() === "ok") {
+            done({ connected: true, detected: 'unknown' });
+          } else {
+            const msg =
+              errBuf.trim() ||
+              `Could not open ${port}. Check USB cable, drivers, and close other serial tools.`;
+            done({ connected: false, message: msg });
+          }
         }
       });
 
       const timer = setTimeout(() => {
         ser.kill();
+        // Timeout on a serial port that's open but no REPL = likely Arduino AVR board
         done({
-          connected: false,
-          message: `Timeout — no response from ${port}.`,
+          connected: true,
+          detected: 'no_repl',
+          message: `Port opened but no REPL detected — likely an Arduino/AVR board.`,
         });
       }, 8000);
 
@@ -532,26 +550,32 @@ except Exception as e:
       // Must cleanly stop monitor and send Ctrl+C to halt running scripts before flash/run!
       await stopMonitorNative();
 
-      // Ensure the device isn't stuck in an infinite loop holdout by brutally sending Ctrl+C
-      await new Promise((resolve) => {
-        const stopScript = `
-import serial, sys, time
-for attempt in range(5):
-    try:
-        s = serial.Serial('${port}', 115200, timeout=0.5)
-        s.write(b'\\r\\x03\\x03\\x03')  
-        time.sleep(0.2)
-        s.close()
-        break
-    except Exception:
-        time.sleep(0.2)
-`;
-        const ser = spawn(getPythonExe(), ["-c", stopScript]);
-        ser.on("close", resolve);
-      });
+      // For MicroPython/CircuitPython: send Ctrl+C to break out of any running loop
+      // For Arduino: skip this — Arduino boards don't have a Python REPL to interrupt
+      const isArduinoLang = language === 'arduino' || language === 'c';
+      if (!isArduinoLang) {
+        await new Promise((resolve) => {
+          const stopScript = [
+            "import serial, sys, time",
+            "for attempt in range(3):",
+            "    try:",
+            `        s = serial.Serial('${port}', 115200, timeout=0.5)`,
+            "        s.write(bytes([13, 3, 3, 3]))",
+            "        time.sleep(0.2)",
+            "        s.close()",
+            "        break",
+            "    except Exception:",
+            "        time.sleep(0.3)",
+          ].join("\n");
+          const ser = spawn(getPythonExe(), ["-c", stopScript]);
+          ser.on("close", resolve);
+        });
+      }
 
       return new Promise(async (resolve) => {
-        const tempFilePath = path.join(os.tmpdir(), "electro_temp.py");
+        // Use correct file extension based on language
+        const ext = isArduinoLang ? '.ino' : '.py';
+        const tempFilePath = path.join(os.tmpdir(), `stratum_temp${ext}`);
         try {
           fs.writeFileSync(tempFilePath, code, "utf-8");
         } catch {
@@ -559,7 +583,7 @@ for attempt in range(5):
           return;
         }
 
-        // Wait a tiny bit for Windows to fully flush handles
+        // Wait for Windows to fully release COM port handles before dispatch
         setTimeout(async () => {
           const uploaderPath = getResourcePath(path.join("firmware-tools", "core", "uploader.py"));
 
@@ -582,8 +606,14 @@ for attempt in range(5):
             args.push("--mode", mode);
           }
 
-          if (mode === "run") {
-            // Live stream execution - acts natively using serialport
+          if (mode === "run" && isArduinoLang) {
+            // Arduino does not support 'run' mode — it requires compile+upload
+            resolve({
+              success: false,
+              message: "Run mode is not supported for Arduino/C++. Use Compile or Upload instead."
+            });
+          } else if (mode === "run") {
+            // Live stream execution - MicroPython/CircuitPython only
             try {
               if (activeSerialPort) await stopMonitorNative();
 
@@ -632,10 +662,12 @@ for attempt in range(5):
                   return;
                 }
 
-                // Restart standard monitor
+                // Wait for port to be fully released, then restart monitor
+                const monitorBaud = isArduinoLang ? 9600 : 115200;
+                await new Promise(r => setTimeout(r, 500));
                 try {
                   if (activeSerialPort) await stopMonitorNative();
-                  activeSerialPort = new SerialPort({ path: port, baudRate: 115200 });
+                  activeSerialPort = new SerialPort({ path: port, baudRate: monitorBaud });
                   activeSerialPort.on("data", (data: Buffer) => {
                     if (win) win.webContents.send("terminal-output", data.toString("utf8"));
                   });
@@ -1038,6 +1070,379 @@ for attempt in range(5):
       return { success: true };
     }
     return { success: false, message: "No active shell process" };
+  });
+
+  ipcMain.handle("hardware:checkArduinoCli", async () => {
+    return new Promise((resolve) => {
+      exec("arduino-cli version", (err) => {
+        if (!err) {
+          resolve(true);
+        } else {
+          // Also check our custom install location
+          const cliExe = path.join(app.getPath('userData'), 'bin', 'arduino-cli.exe');
+          if (fs.existsSync(cliExe)) {
+            // Add to PATH for this session so all future calls find it
+            const binDir = path.join(app.getPath('userData'), 'bin');
+            process.env.PATH = `${binDir};${process.env.PATH}`;
+            resolve(true);
+          } else {
+            resolve(false);
+          }
+        }
+      });
+    });
+  });
+
+  ipcMain.handle("hardware:installArduinoCli", async () => {
+    // Download arduino-cli from GitHub Releases (reliable, no script dependency)
+    const binDir = path.join(app.getPath('userData'), 'bin');
+    const cliExe = path.join(binDir, 'arduino-cli.exe');
+
+    if (fs.existsSync(cliExe)) {
+      console.log("[StratumStudio] arduino-cli already exists at", cliExe);
+      return { success: true, message: 'Already installed' };
+    }
+
+    return new Promise((resolve) => {
+      // Build a robust PowerShell script that:
+      // 1. Downloads arduino-cli ZIP from GitHub Releases
+      // 2. Kills any lingering arduino-cli processes
+      // 3. Clears corrupted staging packages
+      // 4. Installs with retry logic
+      const psScript = [
+        "$ErrorActionPreference = 'Stop'",
+        "try {",
+        `  $binDir = '${binDir.replace(/\\/g, '\\\\')}'`,
+        "  if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }",
+        "  $zipPath = Join-Path $env:TEMP 'arduino-cli.zip'",
+        "  $extractDir = Join-Path $env:TEMP 'arduino-cli-extract'",
+        "  ",
+        "  Write-Host 'Fetching latest arduino-cli version...'",
+        "  $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/arduino/arduino-cli/releases/latest'",
+        "  $tag = $release.tag_name",
+        "  $ver = $tag -replace '^v', ''",
+        '  $url = "https://github.com/arduino/arduino-cli/releases/download/$tag/arduino-cli_" + $ver + "_Windows_64bit.zip"',
+        '  Write-Host "Downloading arduino-cli $tag from $url"',
+        "  ",
+        "  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
+        "  Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing",
+        "  ",
+        "  Write-Host 'Extracting...'",
+        "  if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }",
+        "  Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force",
+        "  ",
+        "  Copy-Item (Join-Path $extractDir 'arduino-cli.exe') $binDir -Force",
+        "  Remove-Item $zipPath -Force -ErrorAction SilentlyContinue",
+        "  Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue",
+        "  ",
+        '  $env:PATH = "$binDir;$env:PATH"',
+        "  $cli = Join-Path $binDir 'arduino-cli.exe'",
+        "  ",
+        "  # Kill any lingering arduino-cli processes that may lock staging files",
+        "  Get-Process -Name 'arduino-cli' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue",
+        "  Start-Sleep -Seconds 1",
+        "  ",
+        "  # Clear corrupted staging packages if they exist",
+        "  $stagingDir = Join-Path $env:LOCALAPPDATA 'Arduino15\\staging\\packages'",
+        "  if (Test-Path $stagingDir) {",
+        "    Write-Host 'Clearing staging packages...'",
+        "    Remove-Item (Join-Path $stagingDir '*') -Recurse -Force -ErrorAction SilentlyContinue",
+        "  }",
+        "  ",
+        "  Write-Host 'Running: arduino-cli core update-index'",
+        "  & $cli core update-index",
+        "  ",
+        "  # Install arduino:avr with retry logic for corrupted archive errors",
+        "  $maxRetries = 3",
+        "  $installed = $false",
+        "  for ($i = 1; $i -le $maxRetries; $i++) {",
+        "    Write-Host \"Installing arduino:avr core (attempt $i/$maxRetries)...\"",
+        "    $out = & $cli core install arduino:avr 2>&1 | Out-String",
+        "    Write-Host $out",
+        "    if ($LASTEXITCODE -eq 0) { $installed = $true; break }",
+        "    if ($out -match 'corrupted') {",
+        "      Write-Host 'Corrupted archive detected. Clearing staging and retrying...'",
+        "      if (Test-Path $stagingDir) { Remove-Item (Join-Path $stagingDir '*') -Recurse -Force -ErrorAction SilentlyContinue }",
+        "      Start-Sleep -Seconds 2",
+        "    } else { break }",
+        "  }",
+        "  if (-not $installed) { Write-Error 'Failed to install arduino:avr core after retries'; exit 1 }",
+        "  ",
+        "  Write-Host 'arduino-cli installed successfully'",
+        "} catch {",
+        "  Write-Error $_.Exception.Message",
+        "  exit 1",
+        "}",
+      ].join("\n");
+
+      // Stream output to renderer terminal
+      const child = spawn('powershell', ['-ExecutionPolicy', 'Bypass', '-Command', psScript]);
+      
+      child.stdout.on('data', (data: Buffer) => {
+        const line = data.toString().trim();
+        console.log('[arduino-cli install]', line);
+        if (win) win.webContents.send('terminal-output', line + '\n');
+      });
+      child.stderr.on('data', (data: Buffer) => {
+        const line = data.toString().trim();
+        console.error('[arduino-cli install error]', line);
+        if (win) win.webContents.send('terminal-output', '❌ ' + line + '\n');
+      });
+
+      child.on('close', (code: number | null) => {
+        if (code === 0) {
+          // Add to process PATH for this session
+          process.env.PATH = `${binDir};${process.env.PATH}`;
+          console.log('[StratumStudio] arduino-cli installed to', binDir);
+          resolve({ success: true });
+        } else {
+          resolve({ success: false, message: `Installation failed with exit code ${code}` });
+        }
+      });
+
+      child.on('error', (e: Error) => {
+        resolve({ success: false, message: e.message });
+      });
+    });
+  });
+
+  // ── Helper functions for native package downloads ──
+  async function fetchUrlContent(url: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const client = url.startsWith('https') ? https : http;
+      client.get(url, (res: any) => {
+        if (res.statusCode === 301 || res.statusCode === 302) {
+          fetchUrlContent(res.headers.location!).then(resolve).catch(reject);
+          return;
+        }
+        if (res.statusCode !== 200) {
+          reject(new Error(`Failed to fetch ${url}, status: ${res.statusCode}`));
+          return;
+        }
+        let body = '';
+        res.on('data', (chunk: Buffer) => body += chunk.toString());
+        res.on('end', () => resolve(body));
+      }).on('error', reject);
+    });
+  }
+
+  async function downloadFileToPath(url: string, destPath: string): Promise<void> {
+    const dir = path.dirname(destPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    return new Promise<void>((resolve, reject) => {
+      const client = url.startsWith('https') ? https : http;
+      client.get(url, (res: any) => {
+        if (res.statusCode === 301 || res.statusCode === 302) {
+          downloadFileToPath(res.headers.location!, destPath).then(resolve).catch(reject);
+          return;
+        }
+        if (res.statusCode !== 200) {
+          reject(new Error(`Failed to download ${url}, status: ${res.statusCode}`));
+          return;
+        }
+        const file = fs.createWriteStream(destPath);
+        res.pipe(file);
+        file.on('finish', () => {
+          file.close();
+          resolve();
+        });
+      }).on('error', reject);
+    });
+  }
+
+  async function installMpyPackageLocally(name: string, libDir: string, version: string = 'latest'): Promise<void> {
+    if (name.startsWith('http://') || name.startsWith('https://')) {
+      if (name.endsWith('.py') || name.endsWith('.mpy')) {
+        const fileName = path.basename(name);
+        await downloadFileToPath(name, path.join(libDir, fileName));
+        return;
+      }
+    }
+
+    const index = 'https://micropython.org/pi/v2';
+    const packageJsonUrl = `${index}/package/py/${name}/${version}.json`;
+    
+    console.log(`[lib:install] Downloading package info from ${packageJsonUrl}`);
+    const jsonStr = await fetchUrlContent(packageJsonUrl);
+    const pkgInfo = JSON.parse(jsonStr);
+    
+    if (pkgInfo.hashes) {
+      for (const [filePath, fileHash] of pkgInfo.hashes) {
+        const fileUrl = `${index}/file/${fileHash.slice(0, 2)}/${fileHash}`;
+        const destPath = path.join(libDir, filePath);
+        console.log(`[lib:install] Downloading file ${filePath} from ${fileUrl}`);
+        await downloadFileToPath(fileUrl, destPath);
+      }
+    }
+    
+    if (pkgInfo.urls) {
+      for (const [filePath, fileUrl] of pkgInfo.urls) {
+        const destPath = path.join(libDir, filePath);
+        console.log(`[lib:install] Downloading url ${filePath} from ${fileUrl}`);
+        await downloadFileToPath(fileUrl, destPath);
+      }
+    }
+    
+    if (pkgInfo.deps) {
+      for (const [depName, depVer] of pkgInfo.deps) {
+        console.log(`[lib:install] Downloading dependency ${depName}`);
+        await installMpyPackageLocally(depName, libDir, depVer || 'latest');
+      }
+    }
+  }
+
+  // ── Toolchain verification IPC handlers ──
+  ipcMain.handle("hardware:checkMpremote", async () => {
+    return new Promise((resolve) => {
+      execFile(getPythonExe(), ['-m', 'mpremote', '--version'], (err) => {
+        resolve(!err);
+      });
+    });
+  });
+
+  ipcMain.handle("hardware:installMpremote", async () => {
+    return new Promise((resolve) => {
+      execFile(getPythonExe(), ['-m', 'pip', 'install', 'mpremote'], (err, stdout, stderr) => {
+        if (err) {
+          resolve({ success: false, message: stderr.trim() || err.message });
+        } else {
+          resolve({ success: true, message: stdout.trim() });
+        }
+      });
+    });
+  });
+
+  // ── Library Manager IPC handlers ──
+  ipcMain.handle("lib:search", async (_, { query, language }) => {
+    try {
+      if (language === 'arduino') {
+        const binDir = path.join(app.getPath('userData'), 'bin');
+        const cliExe = fs.existsSync(path.join(binDir, 'arduino-cli.exe'))
+          ? path.join(binDir, 'arduino-cli.exe')
+          : 'arduino-cli';
+        
+        return new Promise((resolve) => {
+          execFile(cliExe, ['lib', 'search', query, '--format', 'json'], { timeout: 15000 }, (err, stdout) => {
+            if (err) {
+              console.error('[lib:search] arduino-cli error:', err.message);
+              resolve({ success: false, packages: [], message: err.message });
+              return;
+            }
+            try {
+              const data = JSON.parse(stdout);
+              const packages = (data.libraries || []).slice(0, 30).map((lib: any) => ({
+                name: lib.name,
+                author: lib.latest?.author || '',
+                description: lib.latest?.sentence || '',
+                version: lib.latest?.version || '',
+                license: lib.latest?.license || 'Unknown'
+              }));
+              resolve({ success: true, packages });
+            } catch {
+              resolve({ success: true, packages: [] });
+            }
+          });
+        });
+      } else {
+        return new Promise((resolve) => {
+          https.get('https://micropython.org/pi/v2/index.json', (res: any) => {
+            let body = '';
+            res.on('data', (chunk: Buffer) => body += chunk.toString());
+            res.on('end', () => {
+              try {
+                const data = JSON.parse(body);
+                const packages = (data.packages || [])
+                  .filter((p: any) => p.name.toLowerCase().includes(query.toLowerCase()))
+                  .slice(0, 30)
+                  .map((p: any) => ({
+                    name: p.name,
+                    author: p.author || '',
+                    description: p.description || '',
+                    version: p.version || '',
+                    license: p.license || 'MIT'
+                  }));
+                resolve({ success: true, packages });
+              } catch {
+                resolve({ success: true, packages: [] });
+              }
+            });
+          }).on('error', (e: any) => {
+            resolve({ success: false, packages: [], message: e.message });
+          });
+        });
+      }
+    } catch (e: any) {
+      return { success: false, packages: [], message: e.message };
+    }
+  });
+
+  ipcMain.handle("lib:install", async (_, { nameOrUrl, workspacePath, language, port, name }) => {
+    const pkgName = nameOrUrl || name;
+    if (!pkgName) return { success: false, message: "No package name provided" };
+
+    try {
+      if (language === 'arduino') {
+        const binDir = path.join(app.getPath('userData'), 'bin');
+        const cliExe = fs.existsSync(path.join(binDir, 'arduino-cli.exe'))
+          ? path.join(binDir, 'arduino-cli.exe')
+          : 'arduino-cli';
+        
+        return new Promise((resolve) => {
+          execFile(cliExe, ['lib', 'install', pkgName], { timeout: 60000 }, (err, stdout, stderr) => {
+            if (err) {
+              resolve({ success: false, message: stderr.trim() || err.message });
+            } else {
+              resolve({ success: true, fileName: pkgName, message: stdout.trim() || `Installed ${pkgName}` });
+            }
+          });
+        });
+      } else {
+        // MicroPython/CircuitPython: Try mpremote first if available
+        let mpremoteInstalled = false;
+        try {
+          mpremoteInstalled = await new Promise((resolve) => {
+            execFile(getPythonExe(), ['-m', 'mpremote', '--version'], (err) => {
+              resolve(!err);
+            });
+          });
+        } catch {}
+
+        if (mpremoteInstalled) {
+          console.log(`[lib:install] mpremote detected. Using mpremote mip install for ${pkgName}`);
+          const targetPort = port || '';
+          const args = targetPort
+            ? ['-m', 'mpremote', 'connect', targetPort, 'mip', 'install', pkgName]
+            : ['-m', 'mpremote', 'mip', 'install', pkgName];
+
+          const mpremoteResult = await new Promise<any>((resolve) => {
+            execFile(getPythonExe(), args, { timeout: 60000 }, (err, stdout, stderr) => {
+              if (err) {
+                resolve({ success: false, message: stderr.trim() || err.message });
+              } else {
+                resolve({ success: true, fileName: pkgName, message: stdout.trim() || `Installed ${pkgName}` });
+              }
+            });
+          });
+
+          if (mpremoteResult.success) {
+            return mpremoteResult;
+          }
+          console.warn(`[lib:install] mpremote mip install failed: ${mpremoteResult.message}. Falling back to native Node.js downloader...`);
+        }
+
+        // Fallback: Native Node.js package downloader (directly to local /lib folder)
+        if (!workspacePath) {
+          return { success: false, message: "No local workspace open to install package." };
+        }
+        const libDir = path.join(workspacePath, 'lib');
+        await installMpyPackageLocally(pkgName, libDir);
+        return { success: true, fileName: pkgName, message: `Successfully installed ${pkgName} natively into local /lib directory.` };
+      }
+    } catch (e: any) {
+      return { success: false, message: e.message };
+    }
   });
 
   ipcMain.handle("pty:resize", async (_, { cols, rows }) => {

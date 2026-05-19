@@ -16,8 +16,17 @@ const TERMINAL_TABS = [
 ]
 
 export default function TerminalPanel() {
-  const { terminals, activeTerminalId, clearTerminal, isConnected, toggleAiPanel, addTerminal } = useAppStore()
+  const {
+    terminals, activeTerminalId, clearTerminal, isConnected, toggleAiPanel, addTerminal,
+    interpreter, activeBaudRate, setBaudRate
+  } = useAppStore()
   const activeTerminal = terminals.find((t) => t.id === activeTerminalId)
+  const [autoscroll, setAutoscroll] = useState(true)
+  const autoscrollRef = useRef(true)
+
+  useEffect(() => {
+    autoscrollRef.current = autoscroll
+  }, [autoscroll])
 
   const [activeTab, setActiveTab] = useState<TerminalTabId>(terminals[0]?.id || 'term-1')
 
@@ -70,6 +79,9 @@ export default function TerminalPanel() {
 
       const removeListener = (window as any).electronAPI.onPtyOutput((data: string) => {
         term.write(data)
+        if (autoscrollRef.current) {
+          term.scrollToBottom()
+        }
       })
 
       return () => {
@@ -110,6 +122,9 @@ export default function TerminalPanel() {
 
       const removeListener = (window as any).electronAPI.onTerminalOutput((data: string) => {
         term.write(data)
+        if (autoscrollRef.current) {
+          term.scrollToBottom()
+        }
       })
 
       return () => {
@@ -271,7 +286,59 @@ export default function TerminalPanel() {
             <Plus size={13} />
           </button>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', padding: '0 6px', gap: 2, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', padding: '0 6px', gap: 6, flexShrink: 0 }}>
+          {/* Baud Rate selector / indicator */}
+          {terminals.some(t => t.id === activeTab) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 8 }}>
+              {interpreter?.language !== 'arduino' ? (
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-base)', border: '1px solid var(--border)', padding: '2px 8px', borderRadius: 'var(--radius-sm)' }}>
+                   115200 ({interpreter?.language === 'circuitpython' ? 'CircuitPython' : 'MicroPython'} REPL)
+                </span>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Baud:</span>
+                  <select
+                    value={activeBaudRate}
+                    onChange={(e) => setBaudRate(Number(e.target.value))}
+                    style={{
+                      background: 'var(--bg-input)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border-light)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '2px 4px',
+                      fontSize: 11,
+                      cursor: 'pointer',
+                      outline: 'none',
+                    }}
+                  >
+                    <option value={9600}>9600</option>
+                    <option value={19200}>19200</option>
+                    <option value={57600}>57600</option>
+                    <option value={115200}>115200</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Autoscroll checkbox */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 11, color: 'var(--text-muted)', marginRight: 8, userSelect: 'none' }}>
+            <input
+              type="checkbox"
+              checked={autoscroll}
+              onChange={(e) => {
+                setAutoscroll(e.target.checked);
+                if (e.target.checked) {
+                  serialTerm.current?.scrollToBottom();
+                  outputTerm.current?.scrollToBottom();
+                  shellTerm.current?.scrollToBottom();
+                }
+              }}
+              style={{ cursor: 'pointer', width: 12, height: 12, accentColor: 'var(--primary)' }}
+            />
+            <span>Autoscroll</span>
+          </label>
+
           <button className="icon-btn" title="Ask AI About Selection" onClick={askAIToFix} style={{ width: 24, height: 24, color: 'var(--accent)' }}>
             <Zap size={13} />
           </button>
