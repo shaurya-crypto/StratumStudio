@@ -1,7 +1,7 @@
 {
-  "name": "electroai-mcp-server",
+  "name": "stratum-studio-mcp-server",
   "version": "1.0.0",
-  "description": "Model Context Protocol Server for ElectroCODE IoT IDE",
+  "description": "Model Context Protocol Server for Stratum Studio IoT IDE",
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {

@@ -11,8 +11,8 @@ const logger = require("./logger");
 function resolveRefMentions(prompt, sessionState, workspacePath) {
   if (!prompt) return [];
 
-  // Regex to find @filename.ext (supporting dots, underscores, dashes)
-  const mentionRegex = /@([a-zA-Z0-9._\-\/]+)/g;
+  // Regex to find @filename.ext (supporting dots, underscores, dashes, backslashes, colons)
+  const mentionRegex = /@([a-zA-Z0-9._\-\/\\:]+)/g;
   const matches = [...prompt.matchAll(mentionRegex)];
   const resolvedFiles = [];
   const handledNames = new Set();
@@ -42,14 +42,38 @@ function resolveRefMentions(prompt, sessionState, workspacePath) {
        resolvedContent = sessionState.editor.code_buffer;
        resolvedPath = sessionState.editor.active_file;
     }
-    // 3. Try to resolve from disk if workspacePath is provided
-    else if (workspacePath) {
+    // 3. Try to resolve from disk using comprehensive path strategies
+    else {
       try {
-        // Simple exact match or base name match in the root
-        const fullPath = path.isAbsolute(fileName) ? fileName : path.join(workspacePath, fileName);
-        if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isFile()) {
-           resolvedContent = fs.readFileSync(fullPath, "utf-8");
-           resolvedPath = fullPath;
+        const pathsToTry = [];
+        
+        // Strategy A: Is absolute path?
+        const isAbsolute = path.isAbsolute(fileName) || /^[a-zA-Z]:/.test(fileName) || fileName.startsWith('/') || fileName.startsWith('\\');
+        if (isAbsolute) {
+          pathsToTry.push(path.normalize(fileName));
+        } else {
+          // Strategy B: Relative to active file's folder (and grandparent)
+          const activeFile = sessionState.editor.active_file;
+          if (activeFile) {
+            const activeDir = path.dirname(activeFile);
+            pathsToTry.push(path.join(activeDir, fileName));
+            pathsToTry.push(path.join(path.dirname(activeDir), fileName));
+          }
+          
+          // Strategy C: Relative to workspace
+          if (workspacePath) {
+            pathsToTry.push(path.join(workspacePath, fileName));
+            pathsToTry.push(path.join(path.dirname(workspacePath), fileName));
+          }
+        }
+        
+        for (const fullPath of pathsToTry) {
+          const normalized = path.normalize(fullPath);
+          if (fs.existsSync(normalized) && fs.lstatSync(normalized).isFile()) {
+            resolvedContent = fs.readFileSync(normalized, "utf-8");
+            resolvedPath = normalized;
+            break;
+          }
         }
       } catch (err) {
         logger.debug(`Could not resolve @mention ${fileName} from disk: ${err.message}`);
