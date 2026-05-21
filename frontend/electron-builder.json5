@@ -44,7 +44,7 @@
       ]
     },
     {
-      "from": "src/assets/icon.ico",
+      "from": "public/icon.ico",
       "to": "icon.ico"
     }
   ],
@@ -54,7 +54,7 @@
     "category": "public.app-category.developer-tools"
   },
   "win": {
-      "icon": "src/assets/icon.ico",
+      "icon": "public/icon.ico",
       "target": [
         {
           "target": "nsis", // <-- Change this to nsis
@@ -64,9 +64,11 @@
       "artifactName": "${productName}.${ext}"
   },
   "nsis": {
+    "allowToChangeInstallationDirectory": false,
     "oneClick": false,
     "perMachine": false,
-    "allowToChangeInstallationDirectory": true,
+    "allowElevation": true,
+    "installerLanguages": ["en_US"],
     "deleteAppDataOnUninstall": false,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,

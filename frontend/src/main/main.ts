@@ -1,6 +1,15 @@
 import { app, BrowserWindow, ipcMain, dialog, safeStorage, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { autoUpdater } from "electron-updater";
+import path from "node:path";
+import { exec, execSync, spawn, execFile, ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import http from "node:http";
+import https from "node:https";
+import pty from "node-pty";
+import { SerialPort } from "serialport";
+
 
 // Auto Updater Configuration
 autoUpdater.autoDownload = false;
@@ -22,15 +31,28 @@ autoUpdater.on("error", (err) => {
 
 // IPC handlers for auto updater
 ipcMain.on("update:download", () => autoUpdater.downloadUpdate());
-ipcMain.on("update:install", () => autoUpdater.quitAndInstall());
-import path from "node:path";
-import { exec, execSync, spawn, execFile, ChildProcess } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import http from "node:http";
-import https from "node:https";
-import pty from "node-pty";
-import { SerialPort } from "serialport";
+ipcMain.on("update:install", () => {
+  try {
+    // Kill all pty processes first
+    if (ptyProcess) {
+      ptyProcess.kill();
+      ptyProcess = null;
+    }
+
+    // Destroy all windows cleanly
+    BrowserWindow.getAllWindows().forEach((w) => {
+      w.destroy();
+    });
+
+    // Small delay — let processes die before installer runs
+    setTimeout(() => {
+      autoUpdater.quitAndInstall(false, true);
+    }, 500);
+  } catch (e) {
+    // Force quit if anything fails
+    autoUpdater.quitAndInstall(false, true);
+  }
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -120,8 +142,8 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     frame: false, // Frameless window
-    icon: app.isPackaged 
-      ? path.join(process.resourcesPath, "icon.ico") 
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, "icon.ico")
       : path.join(process.env.VITE_PUBLIC!, "icon.ico"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"), // Vite plugin-electron compiles preload.ts to .js
@@ -363,7 +385,7 @@ function setupIpcHandlers() {
       }
 
       const settingsPath = path.join(configDir, "settings.json");
-      
+
       // Sensitive data handled in production manner
       const secureConfig = {
         ...config,
@@ -385,7 +407,7 @@ function setupIpcHandlers() {
 
       const content = fs.readFileSync(settingsPath, "utf-8");
       const config = JSON.parse(content);
-      
+
       // Decrypt for UI usage (if UI needs to see it)
       // Note: In strict proxy mode, UI might not even need the real key
       return {
@@ -627,15 +649,15 @@ function setupIpcHandlers() {
               activeSerialPort.on("open", () => {
                 // Send Ctrl+C multiple times to interrupt current loop
                 activeSerialPort!.write(Buffer.from('\r\x03\x03', 'utf-8'));
-                
+
                 setTimeout(() => {
                   // Enter Raw REPL
                   activeSerialPort!.write(Buffer.from('\x01', 'utf-8'));
-                  
+
                   setTimeout(() => {
                     // Transmit code
                     activeSerialPort!.write(Buffer.from(code, 'utf-8'));
-                    
+
                     setTimeout(() => {
                       // Execute (Exit Raw REPL)
                       activeSerialPort!.write(Buffer.from('\x04', 'utf-8'));
@@ -747,11 +769,11 @@ function setupIpcHandlers() {
           isStoppingExecution = false;
           return resolve({ success: false, message: err.message });
         }
-        
+
         // Send Ctrl+C multiple times to ensure break
         s.write(Buffer.from('\r\x03\x03\x03', 'utf-8'), (wErr) => {
           if (wErr) console.error("Error writing break:", wErr);
-          
+
           setTimeout(() => {
             s.close(() => {
               // Now restart standard monitor automatically using our native logic
@@ -948,7 +970,7 @@ function setupIpcHandlers() {
       const content = fs.readFileSync(settingsPath, "utf-8");
       const config = JSON.parse(content);
       const decryptedKey = decryptValue(config.apiKey);
-      
+
       // 2. Forward request to MCP Server which handles context composition
       //    IMPORTANT: Use Node.js native http.request, NOT fetch.
       //    Electron's production build routes `fetch` through Chromium's net
@@ -1041,9 +1063,9 @@ function setupIpcHandlers() {
   // 10.5. Local Shell (PTY) Integrations
   ipcMain.handle("pty:start", async (_, workspacePath) => {
     if (ptyProcess) {
-      try { ptyProcess.kill(); } catch (e) {}
+      try { ptyProcess.kill(); } catch (e) { }
     }
-    
+
     const shellCommand = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
     try {
       ptyProcess = pty.spawn(shellCommand, [], {
@@ -1177,7 +1199,7 @@ function setupIpcHandlers() {
 
       // Stream output to renderer terminal
       const child = spawn('powershell', ['-ExecutionPolicy', 'Bypass', '-Command', psScript]);
-      
+
       child.stdout.on('data', (data: Buffer) => {
         const line = data.toString().trim();
         console.log('[arduino-cli install]', line);
@@ -1263,11 +1285,11 @@ function setupIpcHandlers() {
 
     const index = 'https://micropython.org/pi/v2';
     const packageJsonUrl = `${index}/package/py/${name}/${version}.json`;
-    
+
     console.log(`[lib:install] Downloading package info from ${packageJsonUrl}`);
     const jsonStr = await fetchUrlContent(packageJsonUrl);
     const pkgInfo = JSON.parse(jsonStr);
-    
+
     if (pkgInfo.hashes) {
       for (const [filePath, fileHash] of pkgInfo.hashes) {
         const fileUrl = `${index}/file/${fileHash.slice(0, 2)}/${fileHash}`;
@@ -1276,7 +1298,7 @@ function setupIpcHandlers() {
         await downloadFileToPath(fileUrl, destPath);
       }
     }
-    
+
     if (pkgInfo.urls) {
       for (const [filePath, fileUrl] of pkgInfo.urls) {
         const destPath = path.join(libDir, filePath);
@@ -1284,7 +1306,7 @@ function setupIpcHandlers() {
         await downloadFileToPath(fileUrl, destPath);
       }
     }
-    
+
     if (pkgInfo.deps) {
       for (const [depName, depVer] of pkgInfo.deps) {
         console.log(`[lib:install] Downloading dependency ${depName}`);
@@ -1322,7 +1344,7 @@ function setupIpcHandlers() {
         const cliExe = fs.existsSync(path.join(binDir, 'arduino-cli.exe'))
           ? path.join(binDir, 'arduino-cli.exe')
           : 'arduino-cli';
-        
+
         return new Promise((resolve) => {
           execFile(cliExe, ['lib', 'search', query, '--format', 'json'], { timeout: 15000 }, (err, stdout) => {
             if (err) {
@@ -1388,7 +1410,7 @@ function setupIpcHandlers() {
         const cliExe = fs.existsSync(path.join(binDir, 'arduino-cli.exe'))
           ? path.join(binDir, 'arduino-cli.exe')
           : 'arduino-cli';
-        
+
         return new Promise((resolve) => {
           execFile(cliExe, ['lib', 'install', pkgName], { timeout: 60000 }, (err, stdout, stderr) => {
             if (err) {
@@ -1407,7 +1429,7 @@ function setupIpcHandlers() {
               resolve(!err);
             });
           });
-        } catch {}
+        } catch { }
 
         if (mpremoteInstalled) {
           console.log(`[lib:install] mpremote detected. Using mpremote mip install for ${pkgName}`);
@@ -1719,7 +1741,7 @@ function startMcpServer(retryCount = 0) {
       console.log(`[MCP] ${data}`);
       fs.appendFileSync(mcpLogFile, `[STDOUT] ${data}`);
     });
-    
+
     mcpProcess.stderr?.on("data", data => {
       console.error(`[MCP] ${data}`);
       fs.appendFileSync(mcpLogFile, `[STDERR] ${data}`);
@@ -1755,12 +1777,12 @@ function killAllProcesses() {
   if (activeSerialPort) {
     try {
       activeSerialPort.close();
-    } catch {}
+    } catch { }
   }
   if (ptyProcess) {
     try {
       ptyProcess.kill();
-    } catch {}
+    } catch { }
   }
   if (mcpProcess) {
     try {
@@ -1769,7 +1791,7 @@ function killAllProcesses() {
       } else {
         mcpProcess.kill("SIGKILL");
       }
-    } catch {}
+    } catch { }
   }
 }
 
